@@ -12,6 +12,11 @@
   </a>
 </p>
 
+<p align="center">
+  Built by <a href="https://askjo.ai?ref=agenthook"><strong>jo</strong></a> ·
+  <a href="https://github.com/Pradeep24"><strong>Pradeep24</strong></a>
+</p>
+
 agenthook is a webhook inbox for coding agents, designed for Pi, Claude Code,
 and Codex (but can likely be used for all kinds of different non-coding-agent stuff).
 It receives authenticated events from external services or other
