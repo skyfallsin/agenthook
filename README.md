@@ -1,0 +1,167 @@
+<p align="center">
+  <img src="assets/agenthook-logo.jpg" alt="A friendly blue hawk holding an envelope" width="360">
+</p>
+
+<h1 align="center">agenthook</h1>
+
+<p align="center">A webhook inbox for coding agents.</p>
+
+<p align="center">
+  <a href="https://github.com/skyfallsin/agenthook/actions/workflows/test.yml">
+    <img src="https://github.com/skyfallsin/agenthook/actions/workflows/test.yml/badge.svg" alt="Tests">
+  </a>
+</p>
+
+agenthook is a webhook inbox for coding agents, designed for Pi, Claude Code,
+and Codex (but can likely be used for all kinds of different non-coding-agent stuff).
+It receives authenticated events from external services or other
+agents, so agents can get updates without blocking their work.
+
+Setup is simple: point your agent at [this repo](https://github.com/skyfallsin/agenthook)
+and ask it to set up agenthook. [SKILL.md](SKILL.md) has the instructions.
+
+## How does it work?
+1. Your agent creates a 'topic' with agenthook.
+2. Something else (agents, external services) posts to agenthook's server endpoint at `http://127.0.0.1:$PORT`
+3. Your agent gets a notification inside its session that there's been an update.
+4. Agent does something with that info.
+
+## What is it useful for?
+A few simple ideas:
+* Have an agent wait for GitHub deploys
+* Ask an agent to create a subagent tree powered by agenthooks
+* Ask a long-running service somewhere to ping your agent with updates
+* Have your suite of agents talk to each other
+* and so much more..
+
+**Pi, Claude Code, and Codex work today.**
+
+## Codex setup
+
+From a checkout, install the Codex skill with:
+
+```sh
+npm run codex:install
+```
+
+This copies the checkout to `$CODEX_HOME/skills/agenthook`, or
+`~/.codex/skills/agenthook` when `CODEX_HOME` is not set. If an older install
+already exists, refresh it with:
+
+```sh
+npm run codex:install -- --force
+```
+
+For local development, use a symlink instead of a copy:
+
+```sh
+npm run codex:install -- --link --force
+```
+
+If you are installing directly from GitHub through Codex's skill installer, use
+repo `skyfallsin/agenthook`, path `.`, and name `agenthook`. The root-path name
+matters because the skill lives at the repository root.
+
+## Local setup
+
+Requires Node.js 24 and Pi. No package dependencies are required.
+Run these commands from the agenthook checkout.
+
+**1. Start the inbox.**
+
+```sh
+npm start
+```
+
+It listens on `127.0.0.1:3210` and creates a private access token at
+`~/.agenthook/token`. Leave it running.
+
+**2. Open Pi in another terminal with the extension loaded.**
+
+```sh
+pi -e ./extensions/pi.ts
+```
+
+Ask Pi to subscribe:
+
+```text
+Use agenthook to subscribe to the demo topic.
+```
+
+The agent calls the `agenthook` tool and continues working while it listens.
+Senders and listeners must use the same topic. Ask the agent to unsubscribe
+to stop listening. The manual `/agenthook demo` and `/agenthook off` commands
+are also available.
+
+**3. Send a sample update from a third terminal.**
+
+```sh
+./bin/agenthook.js send demo '{"status":"success","message":"Sample deployment finished"}'
+```
+
+Pi displays the update as untrusted external data. If Pi is busy, the update
+is queued; if it's idle, it starts a turn. This is a local test event.
+
+## Connect GitHub Actions
+
+For a real deployment, GitHub needs an HTTPS address it can reach. Put a tunnel
+such as [ngrok](https://ngrok.dev) in front of the local inbox; keep agenthook itself on loopback.
+If the hostname already serves another app, preserve its default upstream and
+route only `/agenthook/` to this inbox.
+Use the namespaced base URL, such as `https://<host>/agenthook`, for callbacks.
+
+Then configure the repository's Actions secrets and add a final workflow job
+that sends the deployment result. The setup command handles the secrets, but
+**does not edit the workflow**. If an agent is doing this for you, approve the
+exact repository and callback URL before it makes those changes.
+
+Follow the [GitHub Actions setup](docs/github-actions.md) for the command and
+callback example. Use the same topic in GitHub and Pi.
+
+This repository's test workflow sends results to agenthook after push builds.
+Pull request builds do not send callbacks. The callback requires the three
+Actions secrets described in the setup guide and a reachable listener. If
+sending fails, the callback job fails separately from the tests.
+
+## Agent swarms
+
+You can use agenthook to coordinate a swarm of agents. A coordinator subscribes
+to a report topic, delegates work, and receives findings as workers finish.
+The coordinator decides what happens next; agenthook carries the updates.
+
+Only the coordinator subscribes to the report topic. Workers send to it without
+subscribing, or they can consume reports meant for the coordinator. Workers that
+need incoming messages use separate topics.
+
+Task assignment, review, and recovery are left as an exercise for the reader.
+For Codex-specific subagent reporting rules, including when to use the App
+Server adapter and when a bounded CLI wait is only a smoke test, see the
+[Codex adapter guide](docs/runtimes/codex.md).
+
+## Planned work
+
+- Validate a real GitHub Actions result arriving in an open session.
+- Route updates to specific sessions, with subscriptions and acknowledgements.
+- Continue to validate Codex App Server provenance behavior as its protocol evolves.
+
+## Extensions
+
+- `extensions/pi.ts` — working Pi extension.
+- `extensions/claude-code.ts` — [Claude Code Channels adapter](docs/runtimes/claude-code.md); fully tested and working.
+- `extensions/codex.ts` — [Codex App Server adapter](docs/runtimes/codex.md); fully tested and working.
+
+## Limits and security
+
+Queued events survive restarts, expire after 24 hours, and are limited to 1,000.
+The current inbox removes events on delivery; it does not wait for the agent
+to acknowledge them. Don't use it where losing an update is unacceptable.
+
+Keep the access token private. Incoming payloads are external data, not user
+instructions.
+
+- [Event format and delivery rules](docs/event-contract.md)
+- [Security](docs/security.md)
+- [Pi extension](docs/runtimes/pi.md)
+- [Instructions for agents](SKILL.md)
+
+Run the tests with `npm test`.

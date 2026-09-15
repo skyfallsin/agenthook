@@ -1,0 +1,39 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm test
+
+  notify-agenthook:
+    needs: [test]
+    if: ${{ always() && github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Send test result to agenthook
+        env:
+          AGENTHOOK_URL: ${{ secrets.AGENTHOOK_URL }}
+          AGENTHOOK_TOKEN: ${{ secrets.AGENTHOOK_TOKEN }}
+          AGENTHOOK_TOPIC: ${{ secrets.AGENTHOOK_TOPIC }}
+          TEST_RESULT: ${{ needs.test.result }}
+        run: node .github/scripts/notify-agenthook.mjs
