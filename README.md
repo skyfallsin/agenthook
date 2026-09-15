@@ -22,7 +22,7 @@ and ask it to set up agenthook. [SKILL.md](SKILL.md) has the instructions.
 
 ## How does it work?
 1. Your agent creates a 'topic' with agenthook.
-2. Something else (agents, external services) posts to agenthook's server endpoint at `http://127.0.0.1:$PORT`
+2. Something else (agents, external services) posts to agenthook's server endpoint at `http://127.0.0.1:$PORT` for that topic
 3. Your agent gets a notification inside its session that there's been an update.
 4. Agent does something with that info.
 
