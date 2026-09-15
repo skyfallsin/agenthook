@@ -36,6 +36,24 @@ A few simple ideas:
 
 **Pi, Claude Code, and Codex work today.**
 
+## Claude Code setup
+
+Claude Code uses agenthook as an MCP channel. From a checkout, add the adapter:
+
+```sh
+claude mcp add agenthook -- node /absolute/path/to/agenthook/extensions/claude-code.ts
+```
+
+Then start Claude Code with its development channel enabled:
+
+```sh
+claude --dangerously-load-development-channels server:agenthook
+```
+
+Claude Code starts the adapter itself. Ask it to subscribe to a topic once your
+local agenthook inbox is running. The [Claude Code guide](docs/runtimes/claude-code.md)
+has project-scope setup and the details for restricted tool policies.
+
 ## Codex setup
 
 From a checkout, install the Codex skill with:
@@ -61,46 +79,6 @@ npm run codex:install -- --link --force
 If you are installing directly from GitHub through Codex's skill installer, use
 repo `skyfallsin/agenthook`, path `.`, and name `agenthook`. The root-path name
 matters because the skill lives at the repository root.
-
-## Local setup
-
-Requires Node.js 24 and Pi. No package dependencies are required.
-Run these commands from the agenthook checkout.
-
-**1. Start the inbox.**
-
-```sh
-npm start
-```
-
-It listens on `127.0.0.1:3210` and creates a private access token at
-`~/.agenthook/token`. Leave it running.
-
-**2. Open Pi in another terminal with the extension loaded.**
-
-```sh
-pi -e ./extensions/pi.ts
-```
-
-Ask Pi to subscribe:
-
-```text
-Use agenthook to subscribe to the demo topic.
-```
-
-The agent calls the `agenthook` tool and continues working while it listens.
-Senders and listeners must use the same topic. Ask the agent to unsubscribe
-to stop listening. The manual `/agenthook demo` and `/agenthook off` commands
-are also available.
-
-**3. Send a sample update from a third terminal.**
-
-```sh
-./bin/agenthook.js send demo '{"status":"success","message":"Sample deployment finished"}'
-```
-
-Pi displays the update as untrusted external data. If Pi is busy, the update
-is queued; if it's idle, it starts a turn. This is a local test event.
 
 ## Connect GitHub Actions
 
@@ -137,18 +115,6 @@ Task assignment, review, and recovery are left as an exercise for the reader.
 For Codex-specific subagent reporting rules, including when to use the App
 Server adapter and when a bounded CLI wait is only a smoke test, see the
 [Codex adapter guide](docs/runtimes/codex.md).
-
-## Planned work
-
-- Validate a real GitHub Actions result arriving in an open session.
-- Route updates to specific sessions, with subscriptions and acknowledgements.
-- Continue to validate Codex App Server provenance behavior as its protocol evolves.
-
-## Extensions
-
-- `extensions/pi.ts` — working Pi extension.
-- `extensions/claude-code.ts` — [Claude Code Channels adapter](docs/runtimes/claude-code.md); fully tested and working.
-- `extensions/codex.ts` — [Codex App Server adapter](docs/runtimes/codex.md); fully tested and working.
 
 ## Limits and security
 
