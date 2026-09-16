@@ -12,8 +12,13 @@ function mockPi() {
   const commands = new Map();
   const tools = new Map();
   const messages = [];
+  const events = new Map();
   return {
     handlers, commands, tools, messages,
+    events: {
+      on(name, handler) { events.set(name, handler); return () => events.delete(name); },
+      emit(name, data) { events.get(name)?.(data); },
+    },
     on(name, handler) { handlers.set(name, handler); },
     registerCommand(name, command) { commands.set(name, command); },
     registerTool(tool) { tools.set(tool.name, tool); },

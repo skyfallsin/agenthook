@@ -27,7 +27,61 @@ type WorkerView = {
   report: string;
 };
 
-type ListenerState = "listening" | "reconnecting";
+type GoalWorkerRequest = {
+  version: 1;
+  requestId: string;
+  task: string;
+  title: string;
+  cwd: string;
+  goal: {
+    id: string;
+    parentId: string;
+    storePath: string;
+    contextWindowId: string;
+    parentContextWindowId?: string;
+    capabilityFile?: string;
+    role?: "planner" | "executor";
+  };
+};
+
+type GoalWorkerLaunch = {
+  requestId: string;
+  goalId: string;
+  parentGoalId: string;
+  title: string;
+};
+
+const GOAL_WORKER_REQUEST_EVENT = "pi-bot:goal-worker:request:v1";
+const GOAL_WORKER_STARTED_EVENT = "pi-bot:goal-worker:started:v1";
+const GOAL_WORKER_FAILED_EVENT = "pi-bot:goal-worker:failed:v1";
+const GOAL_WORKER_REPORT_EVENT = "pi-bot:goal-worker:report:v1";
+const GOAL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const CONTEXT_WINDOW_ID_RE = /^\d+$/;
+
+function boundedText(value: unknown, maxLength: number): value is string {
+  return typeof value === "string" && value.trim().length > 0 && value.length <= maxLength;
+}
+
+function parseGoalWorkerRequest(value: unknown): GoalWorkerRequest {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Goal worker request must be an object");
+  const request = value as Record<string, unknown>;
+  const goal = request.goal;
+  if (request.version !== 1 || !boundedText(request.requestId, 128) || !boundedText(request.task, 20_000)
+    || !boundedText(request.title, 80) || !boundedText(request.cwd, 4_096) || !goal || typeof goal !== "object" || Array.isArray(goal)) {
+    throw new Error("Goal worker request v1 is invalid");
+  }
+  const binding = goal as Record<string, unknown>;
+  if (!boundedText(binding.id, 128) || !GOAL_ID_RE.test(binding.id)
+    || !boundedText(binding.parentId, 128) || !GOAL_ID_RE.test(binding.parentId)
+    || !boundedText(binding.storePath, 4_096) || !path.isAbsolute(binding.storePath)
+    || !boundedText(binding.contextWindowId, 128) || !CONTEXT_WINDOW_ID_RE.test(binding.contextWindowId)
+    || (binding.parentContextWindowId !== undefined && (!boundedText(binding.parentContextWindowId, 128) || !CONTEXT_WINDOW_ID_RE.test(binding.parentContextWindowId)))
+    || (binding.capabilityFile !== undefined && (!boundedText(binding.capabilityFile, 4_096) || !path.isAbsolute(binding.capabilityFile)))
+    || (binding.role !== undefined && binding.role !== "planner" && binding.role !== "executor")) {
+    throw new Error("Goal worker binding v1 is invalid");
+  }
+  return request as GoalWorkerRequest;
+}
 
 function textComponent(text: string) {
   return {
@@ -124,7 +178,7 @@ export default async function agenthook(pi: ExtensionAPI, workerOptions = {}) {
   let statusContext: ExtensionContext | undefined;
   let workers: ReturnType<typeof createWorkerManager> | undefined;
   const workerTopic = `workers.${crypto.randomUUID()}`;
-
+  const goalWorkerLaunches = new Map<string, GoalWorkerLaunch>();
   const updateStatus = () => {
     const ctx = statusContext;
     if (!ctx) return;
@@ -203,6 +257,79 @@ export default async function agenthook(pi: ExtensionAPI, workerOptions = {}) {
     updateStatus();
   };
 
+  const ensureWorkers = () => {
+    if (workers) return workers;
+    workers = createWorkerManager({
+      ...workerOptions,
+      onStatusChange: () => updateStatus(),
+      onDeliveryError: () => {
+        updateStatus();
+        statusContext?.ui.notify("Worker report was not accepted by agenthook. Inspect subagent status; no automatic redelivery.", "warning");
+      },
+    });
+    return workers;
+  };
+
+  // This is an extension-only bridge. pi-bot supplies a bounded, versioned request;
+  // its lineage is recorded at launch and never accepted back from a completion callback.
+  pi.events.on(GOAL_WORKER_REQUEST_EVENT, async (payload: unknown) => {
+    let launch: GoalWorkerLaunch | undefined;
+    let request: GoalWorkerRequest;
+    try {
+      request = parseGoalWorkerRequest(payload);
+      const goalBinding: Record<string, string> = {
+        PI_GOAL_ID: request.goal.id,
+        PI_GOALS_STORE: request.goal.storePath,
+        PI_CONTEXT_WINDOW_ID: request.goal.contextWindowId,
+        PI_GOAL_ROLE: request.goal.role ?? "executor",
+      };
+      if (request.goal.parentContextWindowId) goalBinding.PI_PARENT_CONTEXT_WINDOW_ID = request.goal.parentContextWindowId;
+      if (request.goal.capabilityFile) goalBinding.PI_SPRITE_CONTEXT_CAPABILITY_FILE = request.goal.capabilityFile;
+      launch = { requestId: request.requestId, goalId: request.goal.id, parentGoalId: request.goal.parentId, title: shortTitle(request.title) };
+      const { url, token } = config();
+      const worker = await ensureWorkers().start({
+        task: request.task,
+        title: launch.title,
+        cwd: request.cwd,
+        topic: workerTopic,
+        url,
+        token,
+        goalBinding,
+        onRegistered: (registered: WorkerView) => goalWorkerLaunches.set(registered.id, launch),
+        onComplete: async (completed: WorkerView) => {
+          const registered = goalWorkerLaunches.get(completed.id);
+          if (!registered) return;
+          pi.events.emit(GOAL_WORKER_REPORT_EVENT, {
+            version: 1,
+            requestId: registered.requestId,
+            workerId: completed.id,
+            goalId: registered.goalId,
+            parentGoalId: registered.parentGoalId,
+            title: registered.title,
+            status: completed.status,
+            report: completed.report,
+            model: completed.model,
+            thinking: completed.thinking,
+          });
+          goalWorkerLaunches.delete(completed.id);
+        },
+      });
+      pi.events.emit(GOAL_WORKER_STARTED_EVENT, {
+        version: 1, requestId: launch.requestId, workerId: worker.id, goalId: launch.goalId,
+        parentGoalId: launch.parentGoalId, title: launch.title, pid: worker.pid,
+      });
+    } catch (error) {
+      pi.events.emit(GOAL_WORKER_FAILED_EVENT, {
+        version: 1,
+        requestId: launch?.requestId ?? null,
+        goalId: launch?.goalId ?? null,
+        parentGoalId: launch?.parentGoalId ?? null,
+        title: launch?.title ?? null,
+        error: error instanceof Error ? error.message : "Goal worker launch failed",
+      });
+    }
+  });
+
   const subagentParameters = {
     type: "object",
     properties: {
@@ -222,19 +349,12 @@ export default async function agenthook(pi: ExtensionAPI, workerOptions = {}) {
       throw new Error("start requires a concise leaf-work title so pending workers are identifiable");
     }
     statusContext = ctx;
-    if (!workers) workers = createWorkerManager({
-      ...workerOptions,
-      onStatusChange: () => updateStatus(),
-      onDeliveryError: () => {
-        updateStatus();
-        statusContext?.ui.notify("Worker report was not accepted by agenthook. Inspect subagent status; no automatic redelivery.", "warning");
-      },
-    });
+    const manager = ensureWorkers();
     let result;
     if (action === "start") {
       const topic = activeTopic || workerTopic;
       const { url, token } = config();
-      result = await workers.start({ task, title, cwd: path.resolve(ctx.cwd, cwd || "."), topic, url, token, signal,
+      result = await manager.start({ task, title, cwd: path.resolve(ctx.cwd, cwd || "."), topic, url, token, signal,
         beforeSpawn: () => {
           if (activeTopic && activeTopic !== topic) throw new Error("Subscription changed before worker launch; retry with the current topic");
           subscribe(ctx, topic);
