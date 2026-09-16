@@ -5,6 +5,7 @@ import crypto from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 type AgenthookEvent = {
   id: string;
@@ -29,9 +30,12 @@ type WorkerView = {
 type ListenerState = "listening" | "reconnecting";
 
 function textComponent(text: string) {
-  // A tool renderer needs only the public Pi TUI Component shape. Keeping this
-  // structural avoids a runtime dependency when this extension is symlinked.
-  return { render: () => text.split("\n") };
+  return {
+    render: (width: number) => text.split("\n").map((line) =>
+      visibleWidth(line) > width ? truncateToWidth(line, width) : line,
+    ),
+    invalidate() {},
+  };
 }
 
 function shortTitle(value: unknown): string {
