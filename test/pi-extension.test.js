@@ -44,7 +44,15 @@ async function setup(t, startupTopic) {
   if (startupTopic) process.env.AGENTHOOK_TOPIC = startupTopic;
   else delete process.env.AGENTHOOK_TOPIC;
   const pi = mockPi();
-  const ctx = { ui: { notify() {}, setStatus() {} } };
+  const statusUpdates = [];
+  const widgetUpdates = [];
+  const ctx = {
+    ui: {
+      notify() {},
+      setStatus(_key, value) { statusUpdates.push(value); },
+      setWidget(key, value, options) { widgetUpdates.push({ key, value, options }); },
+    },
+  };
   await extension(pi);
   t.after(async () => {
     await pi.handlers.get('session_shutdown')({}, ctx);
@@ -58,7 +66,7 @@ async function setup(t, startupTopic) {
   });
   await pi.handlers.get('session_start')({}, ctx);
   return {
-    app, pi, ctx,
+    app, pi, ctx, statusUpdates, widgetUpdates,
     call: (input, signal) => pi.tools.get('agenthook').execute('test-call', input, signal, undefined, ctx),
     async send(topic, payload = { status: 'success' }) {
       const response = await fetch(`${url}/v1/webhooks/${topic}`, {
@@ -144,6 +152,50 @@ test('manual command uses the same subscription as the agent tool', async (t) =>
   assert.equal((await call({ action: 'status' })).details.topic, 'manual');
   await pi.commands.get('agenthook').handler('off', ctx);
   assert.equal((await call({ action: 'status' })).details.listening, false);
+});
+
+test('subagent requires a concise title for each leaf worker', async (t) => {
+  const { pi, ctx } = await setup(t);
+  const tool = pi.tools.get('subagent');
+  assert.match(tool.description, /Every start must include title/);
+  assert.match(tool.parameters.properties.title.description, /leaf-work title/);
+  await assert.rejects(
+    tool.execute('test-call', { action: 'start', task: 'Check deployment health' }, undefined, undefined, ctx),
+    /requires a concise leaf-work title/,
+  );
+});
+
+test('agenthook renders a live listener panel above the editor', async (t) => {
+  const { call, widgetUpdates } = await setup(t);
+  assert.equal(widgetUpdates.at(-1).value, undefined);
+
+  await call({ action: 'subscribe', topic: 'workers.live' });
+  const panel = widgetUpdates.at(-1);
+  assert.equal(panel.key, 'agenthook');
+  assert.deepEqual(panel.options, { placement: 'aboveEditor' });
+  assert.deepEqual(panel.value, [
+    'Agenthook',
+    'Listening · workers.live',
+    'No active workers',
+  ]);
+});
+
+test('subagent cards use a short title and expand worker lists', async (t) => {
+  const { pi } = await setup(t);
+  const tool = pi.tools.get('subagent');
+  const theme = { fg: (_color, text) => text, bold: text => text };
+  const workers = [
+    { id: 'one', title: 'Check the release notes', topic: 'workers.test', status: 'running', delivery: 'pending', model: 'jo-llm-proxy/gpt-5.6-terra', thinking: 'medium', pid: 1, report: '/tmp/one' },
+    { id: 'two', title: 'Verify the demo', topic: 'workers.test', status: 'completed', delivery: 'accepted', model: 'jo-llm-proxy/gpt-5.6-terra', thinking: 'medium', pid: 2, report: '/tmp/two' },
+  ];
+  const call = tool.renderCall({ action: 'start', title: workers[0].title }, theme).render(120).join('\n');
+  const collapsed = tool.renderResult({ details: workers }, { expanded: false }, theme).render(120).join('\n');
+  const expanded = tool.renderResult({ details: workers }, { expanded: true }, theme).render(120).join('\n');
+  assert.match(call, /subagent.*Check the release notes/);
+  assert.match(collapsed, /2 workers.*1 active.*click or Ctrl\+E to expand/);
+  assert.match(expanded, /Workers \(2\).*running Check the release notes.*completed Verify the demo/s);
+  const legacy = tool.renderResult({ details: { id: 'missing-title-worker', status: 'completed', delivery: 'accepted', model: 'jo-llm-proxy/gpt-5.6-terra', thinking: 'medium' } }, { expanded: true }, theme).render(120).join('\n');
+  assert.match(legacy, /completed Worker missing-/);
 });
 
 test('unsubscribe prevents late responses from entering the session', async (t) => {
