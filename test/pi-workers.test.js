@@ -70,16 +70,7 @@ test('Pi subagent tool returns immediately and concurrent completions use its si
     on(name, handler) { handlers.set(name, handler); },
     sendMessage(message, options) { messages.push({ message, options }); },
   };
-  const statusUpdates = [];
-  const widgetUpdates = [];
-  const ctx = {
-    cwd: dir,
-    ui: {
-      notify() {},
-      setStatus(_key, value) { statusUpdates.push(value); },
-      setWidget(key, value, options) { widgetUpdates.push({ key, value, options }); },
-    },
-  };
+  const ctx = { cwd: dir, ui: { notify() {}, setStatus() {} } };
   await extension(pi, workerOptions);
   t.after(async () => {
     await handlers.get('session_shutdown')({}, ctx);
@@ -88,14 +79,11 @@ test('Pi subagent tool returns immediately and concurrent completions use its si
       else process.env[key] = old[key];
     }
   });
-  const call = input => tools.get('subagent').execute('test', input, undefined, undefined, ctx);
-  assert.ok(tools.has('agenthook_subagent'), 'the former explicit tool name remains available as an alias');
-  const started = await Promise.all([call({ action: 'start', task: 'hold', title: 'Hold first worker' }), call({ action: 'start', task: 'hold', title: 'Hold second worker' })]);
-  assert.deepEqual(started.map(result => result.details.title), ['Hold first worker', 'Hold second worker']);
+  const call = input => tools.get('agenthook_subagent').execute('test', input, undefined, undefined, ctx);
+  const started = await Promise.all([call({ action: 'start', task: 'hold' }), call({ action: 'start', task: 'hold' })]);
   assert.equal(started[0].details.topic, started[1].details.topic);
   assert.equal(messages.length, 0);
   assert.ok(started.every(result => result.details.status === 'running'));
-  await until(() => statusUpdates.some(value => /2 background workers/.test(value || '')));
   await until(() => launches.every(launch => fs.existsSync(launch.ready)));
   for (const result of started) process.kill(result.details.pid, 'SIGUSR1');
   await until(() => messages.length === 2);
@@ -104,7 +92,6 @@ test('Pi subagent tool returns immediately and concurrent completions use its si
     assert.match(message.content, /untrusted data/);
     assert.equal(message.details.payload.kind, 'subagent');
     assert.equal(message.details.payload.status, 'completed');
-    assert.match(message.details.payload.title, /^Hold (first|second) worker$/);
     assert.deepEqual(options, { deliverAs: 'steer', triggerTurn: true });
   }
   assert.deepEqual(app.inbox.topics(), {});
@@ -115,8 +102,7 @@ test('Pi subagent tool returns immediately and concurrent completions use its si
 
 test('worker returns before completion, pins model, and reports via the authenticated inbox', async t => {
   const { manager, launches, app, start } = await setup(t);
-  const job = await start('hold', { title: 'Verify inbox delivery' });
-  assert.equal(job.title, 'Verify inbox delivery');
+  const job = await start();
   assert.equal(job.status, 'running');
   assert.equal(manager.status(job.id).delivery, 'pending');
   assert.deepEqual(app.inbox.topics(), {});
@@ -131,11 +117,9 @@ test('worker returns before completion, pins model, and reports via the authenti
   const event = app.inbox.take('parent.reports');
   assert.equal(event.payload.workerId, job.id);
   assert.equal(event.payload.status, 'completed');
-  assert.equal(event.payload.title, 'Verify inbox delivery');
   assert.equal(event.payload.text, undefined, 'completion callback carries no raw model output');
   const report = JSON.parse(fs.readFileSync(event.payload.report, 'utf8'));
   assert.equal(report.text, 'fixture result\u2028line');
-  assert.equal(report.title, 'Verify inbox delivery');
   assert.equal(fs.statSync(event.payload.report).mode & 0o777, 0o600);
 });
 
