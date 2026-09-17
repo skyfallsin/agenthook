@@ -11,11 +11,13 @@ function mockPi(entries = []) {
   const handlers = new Map();
   const commands = new Map();
   const tools = new Map();
+  const renderers = new Map();
   const messages = [];
   return {
-    handlers, commands, tools, messages, entries,
+    handlers, commands, tools, renderers, messages, entries,
     on(name, handler) { handlers.set(name, handler); },
     appendEntry(customType, data) { entries.push({ type: 'custom', customType, data }); },
+    registerMessageRenderer(customType, renderer) { renderers.set(customType, renderer); },
     registerCommand(name, command) { commands.set(name, command); },
     registerTool(tool) { tools.set(tool.name, tool); },
     sendMessage(message, options) { messages.push({ message, options }); },
@@ -78,6 +80,23 @@ function assertExternalMessage(pi) {
   assert.deepEqual(pi.messages[0].message.details.payload, { status: 'success' });
   assert.deepEqual(pi.messages[0].options, { deliverAs: 'steer', triggerTurn: true });
 }
+
+test('agenthook messages render as compact event cards', async (t) => {
+  const { pi } = await setup(t);
+  const renderer = pi.renderers.get('agenthook');
+  const theme = { fg: (_color, text) => text, bg: (_color, text) => text, bold: text => text };
+  const event = { customType: 'agenthook', content: 'ignored', details: { topic: 'build.test', payload: { kind: 'command', stage: 'progress', elapsedSeconds: 6, progressSequence: 3 } } };
+  const compactLines = renderer(event, { expanded: false, outputPad: 0 }, theme).render(120);
+  const compact = compactLines.join('\n');
+  assert.equal(compactLines.length, 1);
+  assert.match(compactLines[0], /agenthook · build\.test  ◆ Running · 6s · heartbeat 3  $/);
+  assert.doesNotMatch(compact, /UNTRUSTED EXTERNAL DATA/);
+  assert.doesNotMatch(compact, /progressSequence/);
+
+  const expanded = renderer(event, { expanded: true, outputPad: 0 }, theme).render(120).join('\n');
+  assert.match(expanded, /"progressSequence": 3/);
+});
+
 
 test('environment subscription still delivers a webhook as an external custom message', async (t) => {
   const { pi, send } = await setup(t, 'github.test.deploy');

@@ -66,7 +66,7 @@ test('Pi subagent tool returns immediately and concurrent completions use its si
   const handlers = new Map();
   const messages = [];
   const pi = {
-    registerTool(tool) { tools.set(tool.name, tool); }, registerCommand() {},
+    registerTool(tool) { tools.set(tool.name, tool); }, registerCommand() {}, registerMessageRenderer() {},
     on(name, handler) { handlers.set(name, handler); },
     sendMessage(message, options) { messages.push({ message, options }); },
   };

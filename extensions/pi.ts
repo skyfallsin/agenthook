@@ -25,6 +25,55 @@ function config() {
   return { url, token };
 }
 
+function eventTitle(payload: unknown) {
+  if (!payload || typeof payload !== "object") return "External event";
+  const command = payload as { kind?: unknown; stage?: unknown; elapsedSeconds?: unknown; progressSequence?: unknown; exitCode?: unknown };
+  if (command.kind !== "command" || typeof command.stage !== "string") return "External event";
+  const elapsed = typeof command.elapsedSeconds === "number" ? ` · ${command.elapsedSeconds}s` : "";
+  if (command.stage === "started") return "Started";
+  if (command.stage === "progress") return `Running${elapsed}${typeof command.progressSequence === "number" ? ` · heartbeat ${command.progressSequence}` : ""}`;
+  if (command.stage === "completed") return `Completed${typeof command.exitCode === "number" ? ` · exit ${command.exitCode}` : ""}${elapsed}`;
+  if (command.stage === "failed") return `Failed${typeof command.exitCode === "number" ? ` · exit ${command.exitCode}` : ""}${elapsed}`;
+  if (command.stage === "cancelled") return `Cancelled${elapsed}`;
+  return "Update";
+}
+
+function eventColor(payload: unknown) {
+  if (!payload || typeof payload !== "object") return "accent";
+  const stage = (payload as { stage?: unknown }).stage;
+  if (stage === "completed") return "success";
+  if (stage === "failed") return "error";
+  if (stage === "cancelled") return "warning";
+  if (stage === "progress") return "accent";
+  return "warning";
+}
+
+function formatPayload(payload: unknown) {
+  try { return JSON.stringify(payload, null, 2); } catch { return "[payload could not be displayed]"; }
+}
+
+function truncate(text: string, width: number) {
+  if (width <= 0) return "";
+  if (text.length <= width) return text;
+  return width === 1 ? "…" : `${text.slice(0, width - 1)}…`;
+}
+
+function eventCard(title: string, topic: string, payload: unknown, expanded: boolean, outputPad: number, theme: { fg: (color: string, text: string) => string; bg: (color: string, text: string) => string; bold: (text: string) => string }) {
+  return {
+    render(width: number) {
+      const prefix = " ".repeat(Math.min(outputPad, width));
+      const contentWidth = Math.max(width - prefix.length, 1);
+      const rawLines: Array<[string, (value: string) => string]> = [
+        [`agenthook · ${topic}  ◆ ${title}`, (value) => theme.fg(eventColor(payload), theme.bold(value))],
+      ];
+      if (expanded) rawLines.push(...formatPayload(payload).split("\n").map((value) => [`  ${value}`, (item: string) => theme.fg("dim", item)]));
+      const cardWidth = Math.min(contentWidth, Math.max(...rawLines.map(([text]) => text.length)) + 2);
+      return rawLines.map(([text, style]) => prefix + theme.bg("customMessageBg", style(truncate(text, cardWidth).padEnd(cardWidth))));
+    },
+    invalidate() {},
+  };
+}
+
 function startListener(pi: ExtensionAPI, ctx: ExtensionContext, topic: string) {
   const controller = new AbortController();
   void (async () => {
@@ -76,6 +125,11 @@ export default async function agenthook(pi: ExtensionAPI, workerOptions = {}) {
   let reloadTopic: string | undefined;
   let workers: ReturnType<typeof createWorkerManager> | undefined;
   const workerTopic = `workers.${crypto.randomUUID()}`;
+
+  pi.registerMessageRenderer("agenthook", (message, { expanded, outputPad }, theme) => {
+    const event = message.details as Partial<AgenthookEvent> | undefined;
+    return eventCard(eventTitle(event?.payload), event?.topic || "unknown topic", event?.payload, expanded, outputPad, theme);
+  });
 
   const restoreSubscription = (ctx: ExtensionContext) => {
     const branch = ctx.sessionManager.getBranch();
