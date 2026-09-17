@@ -11,8 +11,11 @@
 The agent should subscribe before triggering external work, then continue
 working. It should not poll the inbox or block on the CLI's `wait` command.
 Only one topic is active per session; a new subscription replaces the old one.
-Shutdown or reload stops the listener. After reload, subscribe again unless
-`AGENTHOOK_TOPIC` is set. A stopped listener cannot inject a late response.
+Shutdown stops the listener. On `/reload`, an explicitly selected topic is
+restored from a reload-only snapshot of the current session and listening resumes
+automatically. `AGENTHOOK_TOPIC` is applied at startup, then included in that
+snapshot. `/agenthook off` clears the topic for the next reload. A stopped
+listener cannot inject a late response.
 
 Load the extension with `pi -e ./extensions/pi.ts`, or install it in Pi's
 extension directory. An already-open session needs `/reload` after installation

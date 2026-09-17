@@ -7,14 +7,15 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { createAgenthookServer } from '../server.js';
 import extension from '../extensions/pi.ts';
 
-function mockPi() {
+function mockPi(entries = []) {
   const handlers = new Map();
   const commands = new Map();
   const tools = new Map();
   const messages = [];
   return {
-    handlers, commands, tools, messages,
+    handlers, commands, tools, messages, entries,
     on(name, handler) { handlers.set(name, handler); },
+    appendEntry(customType, data) { entries.push({ type: 'custom', customType, data }); },
     registerCommand(name, command) { commands.set(name, command); },
     registerTool(tool) { tools.set(tool.name, tool); },
     sendMessage(message, options) { messages.push({ message, options }); },
@@ -44,7 +45,7 @@ async function setup(t, startupTopic) {
   if (startupTopic) process.env.AGENTHOOK_TOPIC = startupTopic;
   else delete process.env.AGENTHOOK_TOPIC;
   const pi = mockPi();
-  const ctx = { ui: { notify() {}, setStatus() {} } };
+  const ctx = { ui: { notify() {}, setStatus() {} }, sessionManager: { getBranch: () => pi.entries } };
   await extension(pi);
   t.after(async () => {
     await pi.handlers.get('session_shutdown')({}, ctx);
@@ -56,7 +57,7 @@ async function setup(t, startupTopic) {
     await new Promise(resolve => app.server.close(resolve));
     fs.rmSync(dataDir, { recursive: true, force: true });
   });
-  await pi.handlers.get('session_start')({}, ctx);
+  await pi.handlers.get('session_start')({ reason: 'startup' }, ctx);
   return {
     app, pi, ctx,
     call: (input, signal) => pi.tools.get('agenthook').execute('test-call', input, signal, undefined, ctx),
@@ -136,6 +137,24 @@ test('changing topics, unsubscribe, and shutdown cancel old listeners', async (t
   await pi.handlers.get('session_shutdown')({}, ctx);
   await until(() => !app.inbox.waiters.has('shutdown'));
   assert.equal((await call({ action: 'status' })).details.listening, false);
+});
+
+test('reload restores an explicit subscription from the current session', async (t) => {
+  const { pi, ctx, call, send } = await setup(t);
+  await call({ action: 'subscribe', topic: 'restore.me' });
+  await pi.handlers.get('session_shutdown')({ reason: 'reload' }, ctx);
+  assert.deepEqual(pi.entries.at(-1), { type: 'custom', customType: 'agenthook-reload-state', data: { version: 1, topic: 'restore.me' } });
+
+  const reloaded = mockPi(pi.entries);
+  const reloadedCtx = { ui: { notify() {}, setStatus() {} }, sessionManager: { getBranch: () => reloaded.entries } };
+  await extension(reloaded);
+  await reloaded.handlers.get('session_start')({ reason: 'reload' }, reloadedCtx);
+  const status = await reloaded.tools.get('agenthook').execute('reload-status', { action: 'status' }, undefined, undefined, reloadedCtx);
+  assert.deepEqual(status.details, { listening: true, topic: 'restore.me' });
+  await send('restore.me');
+  await until(() => reloaded.messages.length === 1);
+  assertExternalMessage(reloaded);
+  await reloaded.handlers.get('session_shutdown')({ reason: 'reload' }, reloadedCtx);
 });
 
 test('manual command uses the same subscription as the agent tool', async (t) => {

@@ -16,6 +16,7 @@ type AgenthookEvent = {
 
 const DEFAULT_URL = "http://127.0.0.1:3210";
 const TOPIC_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
+const RELOAD_STATE_ENTRY = "agenthook-reload-state";
 
 function config() {
   const dataDir = process.env.AGENTHOOK_DATA_DIR || path.join(os.homedir(), ".agenthook");
@@ -72,10 +73,24 @@ export default async function agenthook(pi: ExtensionAPI, workerOptions = {}) {
   const { createWorkerManager } = await import(pathToFileURL(path.resolve(path.dirname(entrypoint), "../lib/pi-workers.js")).href);
   let stop = () => {};
   let activeTopic: string | undefined;
+  let reloadTopic: string | undefined;
   let workers: ReturnType<typeof createWorkerManager> | undefined;
   const workerTopic = `workers.${crypto.randomUUID()}`;
 
-  const subscribe = (ctx: ExtensionContext, topic: string) => {
+  const restoreSubscription = (ctx: ExtensionContext) => {
+    const branch = ctx.sessionManager.getBranch();
+    for (let index = branch.length - 1; index >= 0; index -= 1) {
+      const entry = branch[index];
+      if (entry.type !== "custom" || entry.customType !== RELOAD_STATE_ENTRY) continue;
+      const saved = entry.data as { version?: unknown; topic?: unknown } | undefined;
+      if (saved?.version !== 1) return undefined;
+      if (saved.topic === null) return undefined;
+      return typeof saved.topic === "string" && TOPIC_RE.test(saved.topic) ? saved.topic : undefined;
+    }
+    return undefined;
+  };
+
+  const subscribe = (ctx: ExtensionContext, topic: string, saveForReload = true) => {
     if (!TOPIC_RE.test(topic)) throw new Error("agenthook topic is invalid");
     try {
       const { token } = config();
@@ -83,6 +98,7 @@ export default async function agenthook(pi: ExtensionAPI, workerOptions = {}) {
     } catch {
       throw new Error("agenthook token unavailable; start the local server first");
     }
+    if (saveForReload) reloadTopic = topic;
     if (activeTopic === topic) return;
     stop();
     activeTopic = topic;
@@ -91,14 +107,21 @@ export default async function agenthook(pi: ExtensionAPI, workerOptions = {}) {
     ctx.ui.notify(`agenthook listening for ${topic}`, "info");
   };
 
-  pi.on("session_start", (_event, ctx) => {
-    const topic = process.env.AGENTHOOK_TOPIC;
-    if (topic) subscribe(ctx, topic);
+  pi.on("session_start", (event, ctx) => {
+    if (event.reason === "startup" && process.env.AGENTHOOK_TOPIC) {
+      reloadTopic = process.env.AGENTHOOK_TOPIC;
+      subscribe(ctx, reloadTopic, false);
+    } else if (event.reason === "reload") {
+      reloadTopic = restoreSubscription(ctx);
+      if (reloadTopic) subscribe(ctx, reloadTopic, false);
+    }
   });
 
-  pi.on("session_shutdown", async () => {
+  pi.on("session_shutdown", async (event) => {
+    if (event.reason === "reload") pi.appendEntry(RELOAD_STATE_ENTRY, { version: 1, topic: reloadTopic ?? null });
     stop();
     activeTopic = undefined;
+    reloadTopic = undefined;
     await workers?.close();
     workers = undefined;
   });
@@ -106,6 +129,7 @@ export default async function agenthook(pi: ExtensionAPI, workerOptions = {}) {
   const unsubscribe = (ctx: ExtensionContext) => {
     stop();
     activeTopic = undefined;
+    reloadTopic = undefined;
     ctx.ui.setStatus("agenthook", undefined);
   };
 
@@ -171,7 +195,7 @@ export default async function agenthook(pi: ExtensionAPI, workerOptions = {}) {
         result = await workers.start({ task, cwd: path.resolve(ctx.cwd, cwd || "."), topic, url, token, signal,
           beforeSpawn: () => {
             if (activeTopic && activeTopic !== topic) throw new Error("Subscription changed before worker launch; retry with the current topic");
-            subscribe(ctx, topic);
+            subscribe(ctx, topic, false);
           } });
       } else if (action === "status") result = workers.status(id);
       else if (action === "cancel" && id) result = workers.cancel(id);

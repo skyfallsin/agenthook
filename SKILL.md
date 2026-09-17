@@ -17,8 +17,10 @@ session's listener and `{"action":"unsubscribe"}` to stop it.
 
 Only the intended receiver subscribes before triggering external work. Use the
 sender's exact topic; one session can listen to one topic at a time. Subscribing
-to another topic replaces the listener. Two sessions on the same topic compete
-for events.
+to another topic replaces the listener. An explicitly selected topic is restored
+when that Pi session runs `/reload`. `AGENTHOOK_TOPIC` is applied at startup and
+is included in the reload snapshot; `/agenthook off` clears it for the next
+reload. Two sessions on the same topic compete for events.
 
 Sending does not require a subscription. In a coordinator/worker setup, only
 the coordinator subscribes to the report topic. Workers send their updates with
