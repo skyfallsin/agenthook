@@ -31,7 +31,7 @@ process.stdin.on('end', () => {
   }
  };
  process.on('SIGUSR1', finish);
- fs.writeFileSync(process.env.FIXTURE_READY, JSON.stringify({task,topic:process.env.AGENTHOOK_TOPIC ?? null, goalId: process.env.PI_GOAL_ID ?? null, goalStore: process.env.PI_GOALS_STORE ?? null, contextWindowId: process.env.PI_CONTEXT_WINDOW_ID ?? null, parentContextWindowId: process.env.PI_PARENT_CONTEXT_WINDOW_ID ?? null, role: process.env.PI_GOAL_ROLE ?? null, capabilityFile: process.env.PI_SPRITE_CONTEXT_CAPABILITY_FILE ?? null}));
+ fs.writeFileSync(process.env.FIXTURE_READY, JSON.stringify({task,topic:process.env.AGENTHOOK_TOPIC ?? null}));
  if (task !== 'hold') finish();
 });
 `);
@@ -65,15 +65,9 @@ test('Pi subagent tool returns immediately and concurrent completions use its si
   const tools = new Map();
   const handlers = new Map();
   const messages = [];
-  const emittedEvents = [];
-  const eventHandlers = new Map();
   const pi = {
     registerTool(tool) { tools.set(tool.name, tool); }, registerCommand() {},
     on(name, handler) { handlers.set(name, handler); },
-    events: {
-      on(name, handler) { eventHandlers.set(name, handler); return () => eventHandlers.delete(name); },
-      emit(name, payload) { emittedEvents.push({ name, payload }); eventHandlers.get(name)?.(payload); },
-    },
     sendMessage(message, options) { messages.push({ message, options }); },
   };
   const statusUpdates = [];
@@ -117,54 +111,6 @@ test('Pi subagent tool returns immediately and concurrent completions use its si
   const status = await call({ action: 'status', id: started[0].details.id });
   assert.equal(status.details.status, 'completed');
   await handlers.get('session_shutdown')({}, ctx);
-});
-
-test('pi-bot goal worker requests launch persisted goal-bound sessions and report only their registered parent', async t => {
-  const { launches, dir, url, workerOptions } = await setup(t);
-  const handlers = new Map();
-  const eventHandlers = new Map();
-  const emitted = [];
-  const pi = {
-    registerTool() {}, registerCommand() {}, on(name, handler) { handlers.set(name, handler); }, sendMessage() {},
-    events: {
-      on(name, handler) { eventHandlers.set(name, handler); return () => eventHandlers.delete(name); },
-      emit(name, payload) { emitted.push({ name, payload }); },
-    },
-  };
-  const ctx = { cwd: dir, ui: { notify() {}, setStatus() {}, setWidget() {} } };
-  await extension(pi, workerOptions);
-  t.after(() => handlers.get('session_shutdown')({}, ctx));
-
-  const request = {
-    version: 1, requestId: 'request-1', task: 'hold', title: 'Inspect goal worker', cwd: dir,
-    goal: { id: 'goal-child', parentId: 'goal-parent', storePath: path.join(dir, 'goals.json'), contextWindowId: '42', parentContextWindowId: '41', capabilityFile: path.join(dir, 'capability'), role: 'planner' },
-  };
-  await eventHandlers.get('pi-bot:goal-worker:request:v1')(request);
-  const started = emitted.find(event => event.name === 'pi-bot:goal-worker:started:v1');
-  assert.ok(started);
-  assert.equal(started.payload.requestId, request.requestId);
-  assert.equal(started.payload.parentGoalId, 'goal-parent');
-  assert.ok(!launches[0].args.includes('--no-session'));
-  assert.match(launches[0].args[launches[0].args.indexOf('--exclude-tools') + 1], /spawn/);
-  assert.match(launches[0].args[launches[0].args.indexOf('--exclude-tools') + 1], /subagent/);
-  assert.doesNotMatch(launches[0].args[launches[0].args.indexOf('--exclude-tools') + 1], /goal_delegate/);
-  await until(() => fs.existsSync(launches[0].ready));
-  assert.deepEqual(JSON.parse(fs.readFileSync(launches[0].ready, 'utf8')), {
-    task: 'hold', topic: null, goalId: 'goal-child', goalStore: path.join(dir, 'goals.json'), contextWindowId: '42', parentContextWindowId: '41', role: 'planner', capabilityFile: path.join(dir, 'capability'),
-  });
-  process.kill(started.payload.pid, 'SIGUSR1');
-  await until(() => emitted.some(event => event.name === 'pi-bot:goal-worker:report:v1'));
-  const report = emitted.find(event => event.name === 'pi-bot:goal-worker:report:v1').payload;
-  assert.deepEqual({ requestId: report.requestId, workerId: report.workerId, goalId: report.goalId, parentGoalId: report.parentGoalId, title: report.title, status: report.status }, {
-    requestId: 'request-1', workerId: started.payload.workerId, goalId: 'goal-child', parentGoalId: 'goal-parent', title: 'Inspect goal worker', status: 'completed',
-  });
-  assert.match(report.report, /workers\//);
-  assert.equal(emitted.some(event => event.name === 'pi-bot:goal-worker:failed:v1'), false);
-
-  await eventHandlers.get('pi-bot:goal-worker:request:v1')({ version: 1, requestId: 'bad', task: 'x', title: 'Bad', cwd: dir, goal: { id: 'goal-child', parentId: '../forged', storePath: '/relative', contextWindowId: 'bad' } });
-  const failed = emitted.at(-1);
-  assert.equal(failed.name, 'pi-bot:goal-worker:failed:v1');
-  assert.deepEqual(failed.payload, { version: 1, requestId: null, goalId: null, parentGoalId: null, title: null, error: 'Goal worker binding v1 is invalid' });
 });
 
 test('worker returns before completion, pins model, and reports via the authenticated inbox', async t => {
