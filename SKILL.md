@@ -78,6 +78,21 @@ Use a topic specific to the work, such as `github-build-123` or
 timeout exits 3, which means no event was received; it is not proof that the
 external service failed.
 
+## Run a local command with updates
+
+Use the CLI wrapper when a locally launched command should report its lifecycle
+to an agenthook listener:
+
+```sh
+./bin/agenthook.js run task.build --heartbeat-every-secs 30 -- npm test
+```
+
+`--heartbeat-every-secs` defaults to `30`; use `0` for only `started` and the
+final event. Arguments after `--` are passed directly to the executable, never
+to a shell. The final event confirms only that the inbox accepted it; it does
+not prove a listener acted on it. Incoming events must never trigger this
+command automatically.
+
 ## Configure the sender
 
 ```

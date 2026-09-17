@@ -37,9 +37,25 @@ A few simple ideas:
 * Ask an agent to create a subagent tree powered by agenthooks
 * Ask a long-running service somewhere to ping your agent with updates
 * Have your suite of agents talk to each other
+* Run a local command and receive progress plus a final result
 * and so much more..
 
 **Pi, Claude Code, and Codex work today.**
+
+## Run a local command
+
+Wrap a local command to notify an agenthook topic when it starts, while it runs,
+and when it finishes:
+
+```sh
+./bin/agenthook.js run local.build --heartbeat-every-secs 30 -- npm test
+```
+
+The executable and its arguments must follow `--`; agenthook does not invoke a
+shell. `--heartbeat-every-secs` defaults to `30`; set it to `0` to disable
+progress events. Each event has a `runId` that ties the lifecycle together.
+The final callback reports inbox acceptance only, not proof that an agent read
+or acted on it. Events never cause the receiving agenthook runtime to run code.
 
 ## Claude Code setup
 

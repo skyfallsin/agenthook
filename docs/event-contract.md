@@ -31,6 +31,27 @@ The server adds trusted delivery metadata:
 }
 ```
 
+## Command runner events
+
+`agenthook run` sends compact lifecycle payloads. `runId` is shared by its
+`started`, zero or more `progress`, and one terminal event. A `202` response
+means agenthook accepted the event; it does not mean a runtime or agent has
+read it.
+
+```json
+{
+  "kind": "command",
+  "runId": "event UUID",
+  "stage": "progress",
+  "elapsedSeconds": 30,
+  "progressSequence": 1
+}
+```
+
+The terminal `stage` is `completed`, `failed`, or `cancelled`; it also includes
+`exitCode`, `signal`, and the final `progressSequence`. Command arguments,
+output, and environment values are deliberately excluded.
+
 ## Rules
 
 - Keep callbacks compact: status, relevant identifiers, URLs, and a short

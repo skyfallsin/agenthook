@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
+import { runCommand } from '../lib/command-runner.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -17,7 +18,7 @@ function token() {
   return fs.readFileSync(tokenFile, 'utf8').trim();
 }
 function usage() {
-  console.error('Usage: agenthook <token|topics|wait <topic> [--timeout seconds]|send <topic> <JSON>|github configure <owner/repo> --url <https-url> [--topic <topic>] --confirm>');
+  console.error('Usage: agenthook <token|topics|wait <topic> [--timeout seconds]|send <topic> <JSON>|run <topic> [--heartbeat-every-secs seconds] -- <program> <args...>|github configure <owner/repo> --url <https-url> [--topic <topic>] --confirm>');
   process.exit(2);
 }
 function option(args, name) {
@@ -41,6 +42,19 @@ function configureGithub(args) {
   setSecret('AGENTHOOK_TOPIC', webhookTopic);
   process.stdout.write(`${JSON.stringify({ configured: true, repository, secrets: ['AGENTHOOK_URL', 'AGENTHOOK_TOKEN', 'AGENTHOOK_TOPIC'], topic: webhookTopic }, null, 2)}\n`);
 }
+function run(args) {
+  const separator = args.indexOf('--');
+  if (separator < 1 || separator === args.length - 1) usage();
+  const runnerArgs = args.slice(0, separator);
+  const commandArgs = args.slice(separator + 1);
+  let heartbeatEverySeconds = 30;
+  for (let index = 1; index < runnerArgs.length; index += 2) {
+    if (runnerArgs[index] !== '--heartbeat-every-secs' || index + 1 >= runnerArgs.length) usage();
+    heartbeatEverySeconds = Number(runnerArgs[index + 1]);
+  }
+  return runCommand({ topic: runnerArgs[0], command: commandArgs[0], args: commandArgs.slice(1), heartbeatEverySeconds, url: base, token: token() });
+}
+
 async function call(endpoint, options = {}) {
   return fetch(`${base}${endpoint}`, { ...options, headers: { authorization: `Bearer ${token()}`, ...options.headers } });
 }
@@ -65,6 +79,9 @@ if (command === 'token') {
   const response = await call(`/v1/webhooks/${encodeURIComponent(topic)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
   if (!response.ok) throw new Error(`${response.status}: ${await response.text()}`);
   process.stdout.write(`${JSON.stringify(await response.json(), null, 2)}\n`);
+} else if (command === 'run' && topic) {
+  const result = await run([topic, ...rest]);
+  process.exitCode = result.exitCode === 0 ? 0 : 1;
 } else if (command === 'github' && topic === 'configure') {
   configureGithub(rest);
 } else {
