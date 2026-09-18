@@ -95,6 +95,10 @@ test('agenthook messages render as compact event cards', async (t) => {
 
   const expanded = renderer(event, { expanded: true, outputPad: 0 }, theme).render(120).join('\n');
   assert.match(expanded, /"progressSequence": 3/);
+
+  const statusEvent = { customType: 'agenthook', content: 'ignored', details: { topic: 'workers.test', payload: { kind: 'subagent', status: 'completed' } } };
+  const statusLine = renderer(statusEvent, { expanded: false, outputPad: 0 }, theme).render(120)[0];
+  assert.match(statusLine, /agenthook · workers\.test  ◆ completed/);
 });
 
 

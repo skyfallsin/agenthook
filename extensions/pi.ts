@@ -25,10 +25,18 @@ function config() {
   return { url, token };
 }
 
+function eventState(payload: unknown) {
+  if (!payload || typeof payload !== "object") return undefined;
+  const event = payload as { stage?: unknown; status?: unknown; state?: unknown };
+  if (typeof event.stage === "string") return event.stage;
+  if (typeof event.status === "string") return event.status;
+  return typeof event.state === "string" ? event.state : undefined;
+}
+
 function eventTitle(payload: unknown) {
   if (!payload || typeof payload !== "object") return "External event";
   const command = payload as { kind?: unknown; stage?: unknown; elapsedSeconds?: unknown; progressSequence?: unknown; exitCode?: unknown };
-  if (command.kind !== "command" || typeof command.stage !== "string") return "External event";
+  if (command.kind !== "command" || typeof command.stage !== "string") return eventState(payload) || "External event";
   const elapsed = typeof command.elapsedSeconds === "number" ? ` · ${command.elapsedSeconds}s` : "";
   if (command.stage === "started") return "Started";
   if (command.stage === "progress") return `Running${elapsed}${typeof command.progressSequence === "number" ? ` · heartbeat ${command.progressSequence}` : ""}`;
@@ -40,11 +48,11 @@ function eventTitle(payload: unknown) {
 
 function eventColor(payload: unknown) {
   if (!payload || typeof payload !== "object") return "accent";
-  const stage = (payload as { stage?: unknown }).stage;
-  if (stage === "completed") return "success";
-  if (stage === "failed") return "error";
-  if (stage === "cancelled") return "warning";
-  if (stage === "progress") return "accent";
+  const state = eventState(payload);
+  if (state === "completed" || state === "success") return "success";
+  if (state === "failed" || state === "error") return "error";
+  if (state === "cancelled") return "warning";
+  if (state === "progress") return "accent";
   return "warning";
 }
 
