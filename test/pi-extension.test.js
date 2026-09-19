@@ -99,6 +99,21 @@ test('agenthook messages render as compact event cards', async (t) => {
   const statusEvent = { customType: 'agenthook', content: 'ignored', details: { topic: 'workers.test', payload: { kind: 'subagent', status: 'completed' } } };
   const statusLine = renderer(statusEvent, { expanded: false, outputPad: 0 }, theme).render(120)[0];
   assert.match(statusLine, /agenthook · workers\.test  ◆ completed/);
+
+  const progressEvent = { customType: 'agenthook', content: 'ignored', details: { topic: 'workers.test', payload: { kind: 'subagent', status: 'running', elapsedSeconds: 6, progressSequence: 3 } } };
+  const progressLine = renderer(progressEvent, { expanded: false, outputPad: 0 }, theme).render(120)[0];
+  assert.match(progressLine, /agenthook · workers\.test  ◆ running · 6s · heartbeat 3/);
+});
+
+test('subagent start result renders as a titled agenthook card', async (t) => {
+  const { pi } = await setup(t);
+  const tool = pi.tools.get('agenthook_subagent');
+  const theme = { fg: (_color, text) => text, bg: (_color, text) => text, bold: text => text };
+  const result = { details: { topic: 'workers.test', status: 'running', id: 'worker-1' } };
+  const compact = tool.renderResult(result, { expanded: false }, theme).render(120).join('\n');
+  assert.equal(compact, 'agenthook · workers.test  ◆ Worker started  ');
+  const expanded = tool.renderResult(result, { expanded: true }, theme).render(120).join('\n');
+  assert.match(expanded, /"status": "running"/);
 });
 
 

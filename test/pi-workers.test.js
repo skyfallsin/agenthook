@@ -123,6 +123,25 @@ test('worker returns before completion, pins model, and reports via the authenti
   assert.equal(fs.statSync(event.payload.report).mode & 0o777, 0o600);
 });
 
+test('worker emits bounded liveness heartbeats while it runs', async t => {
+  const { manager, launches, app, start } = await setup(t, { heartbeatEveryMilliseconds: 10 });
+  const job = await start();
+  await until(() => fs.existsSync(launches[0].ready));
+  await until(() => app.inbox.topics()['parent.reports'] >= 1);
+  const heartbeat = app.inbox.take('parent.reports');
+  assert.deepEqual(heartbeat.payload, {
+    kind: 'subagent', workerId: job.id, status: 'running', elapsedSeconds: 0, progressSequence: 1,
+  });
+  process.kill(job.pid, 'SIGUSR1');
+  await until(() => manager.status(job.id).delivery === 'accepted');
+  let completion;
+  while (app.inbox.topics()['parent.reports']) {
+    const event = app.inbox.take('parent.reports');
+    if (event.payload.status === 'completed') completion = event;
+  }
+  assert.equal(completion?.payload.status, 'completed');
+});
+
 test('workers launch concurrently and never consume their parent reports', async t => {
   const { manager, launches, app, start } = await setup(t);
   app.inbox.enqueue('parent.reports', { previous: true });

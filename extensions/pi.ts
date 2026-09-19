@@ -36,7 +36,12 @@ function eventState(payload: unknown) {
 function eventTitle(payload: unknown) {
   if (!payload || typeof payload !== "object") return "External event";
   const command = payload as { kind?: unknown; stage?: unknown; elapsedSeconds?: unknown; progressSequence?: unknown; exitCode?: unknown };
-  if (command.kind !== "command" || typeof command.stage !== "string") return eventState(payload) || "External event";
+  if (command.kind !== "command" || typeof command.stage !== "string") {
+    const state = eventState(payload);
+    const elapsed = typeof command.elapsedSeconds === "number" ? ` · ${command.elapsedSeconds}s` : "";
+    const heartbeat = typeof command.progressSequence === "number" ? ` · heartbeat ${command.progressSequence}` : "";
+    return state ? `${state}${elapsed}${heartbeat}` : "External event";
+  }
   const elapsed = typeof command.elapsedSeconds === "number" ? ` · ${command.elapsedSeconds}s` : "";
   if (command.stage === "started") return "Started";
   if (command.stage === "progress") return `Running${elapsed}${typeof command.progressSequence === "number" ? ` · heartbeat ${command.progressSequence}` : ""}`;
@@ -243,6 +248,17 @@ export default async function agenthook(pi: ExtensionAPI, workerOptions = {}) {
       },
       required: ["action"], additionalProperties: false,
     },
+    renderResult(result, { expanded }, theme) {
+      const worker = result.details as { topic?: unknown } | undefined;
+      return eventCard(
+        "Worker started",
+        typeof worker?.topic === "string" ? worker.topic : "unknown topic",
+        result.details,
+        expanded,
+        0,
+        theme,
+      );
+    },
     async execute(_id, input: unknown, signal, _onUpdate, ctx) {
       signal?.throwIfAborted();
       const { action, task, cwd, id } = (input ?? {}) as { action?: string; task?: string; cwd?: string; id?: string };
@@ -265,7 +281,7 @@ export default async function agenthook(pi: ExtensionAPI, workerOptions = {}) {
       else throw new Error("Expected start, status, cancel with id, or forget with id");
       return {
         content: [{ type: "text", text: action === "start"
-          ? `Worker process started; this is not completion. Continue working; agenthook will deliver its result.\n${JSON.stringify(result)}`
+          ? "Worker started.\nCompletion will arrive via agenthook; continue working."
           : JSON.stringify(result) }],
         details: result,
       };
