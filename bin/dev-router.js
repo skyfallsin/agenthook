@@ -54,9 +54,18 @@ export function createDevRouter({
   port = Number(process.env.DEV_ROUTER_PORT || 3211),
   joPort = 10000,
   agenthookPort = 3210,
+  appleMessagesPort = Number(process.env.DEV_ROUTER_APPLE_MESSAGES_PORT || 0),
 } = {}) {
   if (!['127.0.0.1', '::1', 'localhost'].includes(host)) throw new Error('Development router must bind to loopback');
-  const upstreamFor = target => ({ host: '127.0.0.1', port: target.agenthook ? agenthookPort : joPort, path: target.path });
+  const upstreamFor = target => {
+    const pathname = target.path.split('?')[0];
+    const appleReview = appleMessagesPort && !target.agenthook && (
+      pathname === '/v1/apple-messages/contact' ||
+      pathname === '/v1/apple-messages/stream-event' ||
+      pathname === '/__apple-support/' || pathname.startsWith('/__apple-support/')
+    );
+    return { host: '127.0.0.1', port: target.agenthook ? agenthookPort : appleReview ? appleMessagesPort : joPort, path: target.path };
+  };
   const server = http.createServer((request, response) => {
     const target = route(request.url);
     if (!target || target.reject) {
