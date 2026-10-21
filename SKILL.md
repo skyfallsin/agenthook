@@ -15,6 +15,18 @@ It returns immediately. Continue working; events arrive later as labeled,
 untrusted external messages. Use `{"action":"status"}` to inspect this
 session's listener and `{"action":"unsubscribe"}` to stop it.
 
+By default a subscription is one-shot: it delivers events normally but
+unsubscribes itself after the first terminal event — one whose
+`status`/`stage`/`state` is `completed`, `success`, `failed`, `error`, or
+`cancelled`. This fits waiting for a single job to finish and avoids acting on
+stray or next-run events. For a topic that carries several completions or an
+ongoing feed (for example a shared subagent report topic or a continuous
+webhook stream), pass `"stream":true` to keep listening for every event. The
+command form is `/agenthook <topic>` for one-shot and `/agenthook <topic>
+stream` to stay subscribed. At startup `AGENTHOOK_TOPIC` subscribes one-shot;
+set `AGENTHOOK_MODE=stream` to keep it streaming. The subagent worker path
+always streams, since one topic carries every worker's completion.
+
 Only the intended receiver subscribes before triggering external work. Use the
 sender's exact topic; one session can listen to one topic at a time. Subscribing
 to another topic replaces the listener. An explicitly selected topic is restored

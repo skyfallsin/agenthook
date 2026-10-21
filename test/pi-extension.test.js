@@ -179,9 +179,9 @@ test('changing topics, unsubscribe, and shutdown cancel old listeners', async (t
 
 test('reload restores an explicit subscription from the current session', async (t) => {
   const { pi, ctx, call, send } = await setup(t);
-  await call({ action: 'subscribe', topic: 'restore.me' });
+  await call({ action: 'subscribe', topic: 'restore.me', stream: true });
   await pi.handlers.get('session_shutdown')({ reason: 'reload' }, ctx);
-  assert.deepEqual(pi.entries.at(-1), { type: 'custom', customType: 'agenthook-reload-state', data: { version: 1, topic: 'restore.me' } });
+  assert.deepEqual(pi.entries.at(-1), { type: 'custom', customType: 'agenthook-reload-state', data: { version: 1, topic: 'restore.me', mode: 'stream' } });
 
   const reloaded = mockPi(pi.entries);
   const reloadedCtx = { ui: { notify() {}, setStatus() {} }, sessionManager: { getBranch: () => reloaded.entries } };
@@ -201,6 +201,61 @@ test('manual command uses the same subscription as the agent tool', async (t) =>
   assert.equal((await call({ action: 'status' })).details.topic, 'manual');
   await pi.commands.get('agenthook').handler('off', ctx);
   assert.equal((await call({ action: 'status' })).details.listening, false);
+});
+
+test('subscribe stops after the first terminal event by default', async (t) => {
+  const { pi, app, call, send } = await setup(t);
+  const started = await call({ action: 'subscribe', topic: 'oneshot.test' });
+  assert.deepEqual(started.details, { listening: true, topic: 'oneshot.test' });
+  await until(() => app.inbox.waiters.has('oneshot.test'));
+  await send('oneshot.test', { status: 'success' });
+  await until(() => pi.messages.length === 1);
+  assertExternalMessage(pi);
+  // Listener stopped itself; the topic is no longer being waited on.
+  await until(() => !app.inbox.waiters.has('oneshot.test'));
+  assert.deepEqual((await call({ action: 'status' })).details, { listening: false, topic: null });
+  // A second event after the terminal one is not delivered into the session.
+  await send('oneshot.test', { status: 'success' });
+  await delay(50);
+  assert.equal(pi.messages.length, 1);
+});
+
+test('default mode keeps streaming past non-terminal events, then stops on terminal', async (t) => {
+  const { pi, app, call, send } = await setup(t);
+  await call({ action: 'subscribe', topic: 'progress.test' });
+  await until(() => app.inbox.waiters.has('progress.test'));
+  await send('progress.test', { kind: 'subagent', status: 'running', progressSequence: 1 });
+  await until(() => pi.messages.length === 1);
+  // Still listening after a non-terminal event.
+  await until(() => app.inbox.waiters.has('progress.test'));
+  assert.equal((await call({ action: 'status' })).details.listening, true);
+  await send('progress.test', { status: 'success' });
+  await until(() => pi.messages.length === 2);
+  await until(() => !app.inbox.waiters.has('progress.test'));
+});
+
+test('stream=true keeps listening past terminal events', async (t) => {
+  const { pi, app, call, send } = await setup(t);
+  await call({ action: 'subscribe', topic: 'stream.test', stream: true });
+  await until(() => app.inbox.waiters.has('stream.test'));
+  await send('stream.test', { status: 'success' });
+  await until(() => pi.messages.length === 1);
+  // Still listening after a terminal event because streaming was requested.
+  await until(() => app.inbox.waiters.has('stream.test'));
+  assert.equal((await call({ action: 'status' })).details.listening, true);
+  await send('stream.test', { status: 'success' });
+  await until(() => pi.messages.length === 2);
+});
+
+test('command stream suffix keeps the listener alive past terminal events', async (t) => {
+  const { pi, ctx, app, call, send } = await setup(t);
+  await pi.commands.get('agenthook').handler('cmd.stream stream', ctx);
+  assert.equal((await call({ action: 'status' })).details.topic, 'cmd.stream');
+  await until(() => app.inbox.waiters.has('cmd.stream'));
+  await send('cmd.stream', { status: 'success' });
+  await until(() => pi.messages.length === 1);
+  await until(() => app.inbox.waiters.has('cmd.stream'));
+  assert.equal((await call({ action: 'status' })).details.listening, true);
 });
 
 test('unsubscribe prevents late responses from entering the session', async (t) => {

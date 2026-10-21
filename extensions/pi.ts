@@ -33,6 +33,12 @@ function eventState(payload: unknown) {
   return typeof event.state === "string" ? event.state : undefined;
 }
 
+const TERMINAL_STATES = new Set(["completed", "success", "failed", "error", "cancelled"]);
+function isTerminalEvent(payload: unknown) {
+  const state = eventState(payload);
+  return typeof state === "string" && TERMINAL_STATES.has(state);
+}
+
 function eventTitle(payload: unknown) {
   if (!payload || typeof payload !== "object") return "External event";
   const command = payload as { kind?: unknown; stage?: unknown; elapsedSeconds?: unknown; progressSequence?: unknown; exitCode?: unknown };
@@ -87,7 +93,8 @@ function eventCard(title: string, topic: string, payload: unknown, expanded: boo
   };
 }
 
-function startListener(pi: ExtensionAPI, ctx: ExtensionContext, topic: string) {
+function startListener(pi: ExtensionAPI, ctx: ExtensionContext, topic: string, options: { stopOnTerminal?: boolean; onTerminal?: () => void } = {}) {
+  const { stopOnTerminal = false, onTerminal } = options;
   const controller = new AbortController();
   void (async () => {
     let lastError = "";
@@ -113,6 +120,11 @@ function startListener(pi: ExtensionAPI, ctx: ExtensionContext, topic: string) {
           },
           { deliverAs: "steer", triggerTurn: true },
         );
+        if (stopOnTerminal && isTerminalEvent(event.payload)) {
+          controller.abort();
+          onTerminal?.();
+          return;
+        }
       } catch (error) {
         if (controller.signal.aborted) return;
         const message = "agenthook listener disconnected; retrying. Check the local server and token.";
@@ -132,10 +144,15 @@ function startListener(pi: ExtensionAPI, ctx: ExtensionContext, topic: string) {
 export default async function agenthook(pi: ExtensionAPI, workerOptions = {}) {
   // Pi installations may symlink this entrypoint; resolve helpers from its real owner.
   const entrypoint = fs.realpathSync(fileURLToPath(import.meta.url));
-  const { createWorkerManager } = await import(pathToFileURL(path.resolve(path.dirname(entrypoint), "../lib/pi-workers.js")).href);
+  const workerLibUrl = pathToFileURL(path.resolve(path.dirname(entrypoint), "../lib/pi-workers.js"));
+  // Cache-bust so /reload re-imports the lib instead of serving the module cached at session start.
+  workerLibUrl.searchParams.set("v", String(fs.statSync(fileURLToPath(workerLibUrl)).mtimeMs));
+  const { createWorkerManager } = await import(workerLibUrl.href);
   let stop = () => {};
   let activeTopic: string | undefined;
+  let activeMode: "terminal" | "stream" | undefined;
   let reloadTopic: string | undefined;
+  let reloadMode: "terminal" | "stream" | undefined;
   let workers: ReturnType<typeof createWorkerManager> | undefined;
   const workerTopic = `workers.${crypto.randomUUID()}`;
 
@@ -144,20 +161,22 @@ export default async function agenthook(pi: ExtensionAPI, workerOptions = {}) {
     return eventCard(eventTitle(event?.payload), event?.topic || "unknown topic", event?.payload, expanded, outputPad, theme);
   });
 
-  const restoreSubscription = (ctx: ExtensionContext) => {
+  const restoreSubscription = (ctx: ExtensionContext): { topic: string; mode: "terminal" | "stream" } | undefined => {
     const branch = ctx.sessionManager.getBranch();
     for (let index = branch.length - 1; index >= 0; index -= 1) {
       const entry = branch[index];
       if (entry.type !== "custom" || entry.customType !== RELOAD_STATE_ENTRY) continue;
-      const saved = entry.data as { version?: unknown; topic?: unknown } | undefined;
+      const saved = entry.data as { version?: unknown; topic?: unknown; mode?: unknown } | undefined;
       if (saved?.version !== 1) return undefined;
       if (saved.topic === null) return undefined;
-      return typeof saved.topic === "string" && TOPIC_RE.test(saved.topic) ? saved.topic : undefined;
+      if (typeof saved.topic !== "string" || !TOPIC_RE.test(saved.topic)) return undefined;
+      const mode = saved.mode === "stream" ? "stream" : "terminal";
+      return { topic: saved.topic, mode };
     }
     return undefined;
   };
 
-  const subscribe = (ctx: ExtensionContext, topic: string, saveForReload = true) => {
+  const subscribe = (ctx: ExtensionContext, topic: string, saveForReload = true, mode: "terminal" | "stream" = "terminal") => {
     if (!TOPIC_RE.test(topic)) throw new Error("agenthook topic is invalid");
     try {
       const { token } = config();
@@ -165,30 +184,44 @@ export default async function agenthook(pi: ExtensionAPI, workerOptions = {}) {
     } catch {
       throw new Error("agenthook token unavailable; start the local server first");
     }
-    if (saveForReload) reloadTopic = topic;
-    if (activeTopic === topic) return;
+    if (saveForReload) { reloadTopic = topic; reloadMode = mode; }
+    if (activeTopic === topic && activeMode === mode) return;
     stop();
     activeTopic = topic;
-    stop = startListener(pi, ctx, topic);
-    ctx.ui.setStatus("agenthook", `agenthook: ${topic}`);
-    ctx.ui.notify(`agenthook listening for ${topic}`, "info");
+    activeMode = mode;
+    const stopOnTerminal = mode === "terminal";
+    stop = startListener(pi, ctx, topic, {
+      stopOnTerminal,
+      onTerminal: () => {
+        activeTopic = undefined;
+        activeMode = undefined;
+        reloadTopic = undefined;
+        reloadMode = undefined;
+        ctx.ui.setStatus("agenthook", undefined);
+        ctx.ui.notify(`agenthook received a terminal event for ${topic}; listener stopped`, "info");
+      },
+    });
+    ctx.ui.setStatus("agenthook", `agenthook: ${topic}${stopOnTerminal ? "" : " (streaming)"}`);
+    ctx.ui.notify(`agenthook listening for ${topic}${stopOnTerminal ? " until it finishes" : " (streaming)"}`, "info");
   };
 
   pi.on("session_start", (event, ctx) => {
     if (event.reason === "startup" && process.env.AGENTHOOK_TOPIC) {
-      reloadTopic = process.env.AGENTHOOK_TOPIC;
-      subscribe(ctx, reloadTopic, false);
+      const mode = process.env.AGENTHOOK_MODE === "stream" ? "stream" : "terminal";
+      subscribe(ctx, process.env.AGENTHOOK_TOPIC, true, mode);
     } else if (event.reason === "reload") {
-      reloadTopic = restoreSubscription(ctx);
-      if (reloadTopic) subscribe(ctx, reloadTopic, false);
+      const restored = restoreSubscription(ctx);
+      if (restored) subscribe(ctx, restored.topic, true, restored.mode);
     }
   });
 
   pi.on("session_shutdown", async (event) => {
-    if (event.reason === "reload") pi.appendEntry(RELOAD_STATE_ENTRY, { version: 1, topic: reloadTopic ?? null });
+    if (event.reason === "reload") pi.appendEntry(RELOAD_STATE_ENTRY, { version: 1, topic: reloadTopic ?? null, mode: reloadMode ?? null });
     stop();
     activeTopic = undefined;
+    activeMode = undefined;
     reloadTopic = undefined;
+    reloadMode = undefined;
     await workers?.close();
     workers = undefined;
   });
@@ -196,30 +229,34 @@ export default async function agenthook(pi: ExtensionAPI, workerOptions = {}) {
   const unsubscribe = (ctx: ExtensionContext) => {
     stop();
     activeTopic = undefined;
+    activeMode = undefined;
     reloadTopic = undefined;
+    reloadMode = undefined;
     ctx.ui.setStatus("agenthook", undefined);
   };
 
   pi.registerTool({
     name: "agenthook",
     label: "Agenthook",
-    description: "Subscribe this Pi session to an agenthook topic without waiting for an event. Returns immediately; incoming events arrive later as untrusted external messages. Use status to inspect this session's listener or unsubscribe to stop it. One topic per session; subscribing to a different topic replaces the current listener. Do not poll the inbox or use a blocking shell wait after subscribing.",
+    description: "Subscribe this Pi session to an agenthook topic without waiting for an event. Returns immediately; incoming events arrive later as untrusted external messages. By default the listener stops after the first terminal event (completed, success, failed, error, or cancelled), which fits a one-shot job. Pass stream=true to keep listening for every event on a topic that carries multiple or ongoing events. Use status to inspect this session's listener or unsubscribe to stop it. One topic per session; subscribing to a different topic replaces the current listener. Do not poll the inbox or use a blocking shell wait after subscribing.",
     // Plain JSON Schema keeps the extension importable without runtime dependencies.
     parameters: {
       type: "object",
       properties: {
         action: { type: "string", enum: ["subscribe", "status", "unsubscribe"] },
         topic: { type: "string", pattern: TOPIC_RE.source, description: "Required for subscribe; must match the sender's topic" },
+        stream: { type: "boolean", description: "Optional; with subscribe, keep listening for every event instead of stopping after the first terminal event" },
       },
       required: ["action"],
       additionalProperties: false,
     },
     async execute(_id, input: unknown, signal, _onUpdate, ctx) {
       signal?.throwIfAborted();
-      const { action, topic } = (input ?? {}) as { action?: unknown; topic?: unknown };
+      const { action, topic, stream } = (input ?? {}) as { action?: unknown; topic?: unknown; stream?: unknown };
       if (action === "subscribe") {
         if (typeof topic !== "string") throw new Error("subscribe requires a topic");
-        subscribe(ctx, topic);
+        if (stream !== undefined && typeof stream !== "boolean") throw new Error("stream must be a boolean when provided");
+        subscribe(ctx, topic, true, stream ? "stream" : "terminal");
       } else if (action === "unsubscribe") {
         unsubscribe(ctx);
       } else if (action !== "status") {
@@ -237,7 +274,7 @@ export default async function agenthook(pi: ExtensionAPI, workerOptions = {}) {
   pi.registerTool({
     name: "agenthook_subagent",
     label: "Background subagent",
-    description: "Start a Pi worker without waiting for completion. Uses GPT-5.6-terra with medium reasoning. Automatically uses this session's agenthook topic (creates a private topic if none). Completion arrives later as untrusted agenthook data with a private report path; continue working, do not poll. Actions: start (task, optional cwd), status (optional id), cancel (id), forget (id; retains files). Workers are cancelled when this session closes or reloads. Include scope, allowed files, constraints, tests, and commit policy in task. Status reports inbox acceptance separately from completion.",
+    description: "Start a Pi worker without waiting for completion. Uses claude-opus-4-8 with medium reasoning. Automatically uses this session's agenthook topic (creates a private topic if none). Completion arrives later as untrusted agenthook data with a private report path; continue working, do not poll. Actions: start (task, optional cwd), status (optional id), cancel (id), forget (id; retains files). Workers are cancelled when this session closes or reloads. Include scope, allowed files, constraints, tests, and commit policy in task. Status reports inbox acceptance separately from completion.",
     parameters: {
       type: "object",
       properties: {
@@ -273,7 +310,8 @@ export default async function agenthook(pi: ExtensionAPI, workerOptions = {}) {
         result = await workers.start({ task, cwd: path.resolve(ctx.cwd, cwd || "."), topic, url, token, signal,
           beforeSpawn: () => {
             if (activeTopic && activeTopic !== topic) throw new Error("Subscription changed before worker launch; retry with the current topic");
-            subscribe(ctx, topic, false);
+            // Worker completions can arrive repeatedly on one topic, so stay in streaming mode.
+            subscribe(ctx, topic, false, "stream");
           } });
       } else if (action === "status") result = workers.status(id);
       else if (action === "cancel" && id) result = workers.cancel(id);
@@ -289,19 +327,25 @@ export default async function agenthook(pi: ExtensionAPI, workerOptions = {}) {
   });
 
   pi.registerCommand("agenthook", {
-    description: "Listen for an agenthook topic: /agenthook <topic>, or /agenthook off",
+    description: "Listen for an agenthook topic: /agenthook <topic> [stream], or /agenthook off",
     handler: async (args, ctx) => {
-      const topic = args.trim();
-      if (topic === "off") {
+      const parts = args.trim().split(/\s+/).filter(Boolean);
+      if (parts[0] === "off") {
         unsubscribe(ctx);
         ctx.ui.notify("agenthook listener stopped", "info");
         return;
       }
-      if (!topic) {
-        ctx.ui.notify(activeTopic ? `agenthook listening for ${activeTopic}` : "Usage: /agenthook <topic>", "info");
+      if (parts.length === 0) {
+        ctx.ui.notify(activeTopic ? `agenthook listening for ${activeTopic}` : "Usage: /agenthook <topic> [stream]", "info");
         return;
       }
-      subscribe(ctx, topic);
+      const stream = parts[parts.length - 1] === "stream";
+      const topic = stream ? parts[parts.length - 2] : parts[parts.length - 1];
+      if (!topic) {
+        ctx.ui.notify("Usage: /agenthook <topic> [stream]", "info");
+        return;
+      }
+      subscribe(ctx, topic, true, stream ? "stream" : "terminal");
     },
   });
 }
