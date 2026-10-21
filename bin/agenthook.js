@@ -48,11 +48,17 @@ function run(args) {
   const runnerArgs = args.slice(0, separator);
   const commandArgs = args.slice(separator + 1);
   let heartbeatEverySeconds = 30;
-  for (let index = 1; index < runnerArgs.length; index += 2) {
-    if (runnerArgs[index] !== '--heartbeat-every-secs' || index + 1 >= runnerArgs.length) usage();
-    heartbeatEverySeconds = Number(runnerArgs[index + 1]);
+  let label = null;
+  for (let index = 1; index < runnerArgs.length;) {
+    const flag = runnerArgs[index];
+    const value = runnerArgs[index + 1];
+    if (!value) usage();
+    if (flag === '--heartbeat-every-secs') heartbeatEverySeconds = Number(value);
+    else if (flag === '--label') label = value;
+    else usage();
+    index += 2;
   }
-  return runCommand({ topic: runnerArgs[0], command: commandArgs[0], args: commandArgs.slice(1), heartbeatEverySeconds, url: base, token: token() });
+  return runCommand({ topic: runnerArgs[0], command: commandArgs[0], args: commandArgs.slice(1), heartbeatEverySeconds, label, url: base, token: token() });
 }
 
 async function call(endpoint, options = {}) {

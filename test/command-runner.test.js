@@ -58,6 +58,7 @@ test('command runner publishes ordered progress and terminal events without leak
     command: process.execPath,
     args: [child, 'private-argument'],
     heartbeatEverySeconds: 1,
+    label: 'case-42',
     url: inbox.url,
     token: inbox.token,
   });
@@ -70,6 +71,7 @@ test('command runner publishes ordered progress and terminal events without leak
   assert.deepEqual(payloads.map(payload => payload.runId), [result.runId, result.runId, result.runId]);
   assert.equal(payloads[1].progressSequence, 1);
   assert.equal(payloads[2].progressSequence, 1);
+  assert.deepEqual(payloads.map(payload => payload.label), ['case-42', 'case-42', 'case-42']);
   for (const payload of payloads) {
     assert.equal(Object.hasOwn(payload, 'command'), false);
     assert.equal(Object.hasOwn(payload, 'args'), false);
@@ -105,6 +107,7 @@ test('command runner validates input before spawning or publishing', async (t) =
   await assert.rejects(runCommand({ ...base, topic: '../invalid' }), /valid topic/);
   await assert.rejects(runCommand({ ...base, topic: 'command.validation', heartbeatEverySeconds: -1 }), /non-negative integer/);
   await assert.rejects(runCommand({ ...base, topic: 'command.validation', command: '' }), /program after --/);
+  await assert.rejects(runCommand({ ...base, topic: 'command.validation', label: 'not safe' }), /safe identifier/);
   assert.equal(spawned, false);
   assert.deepEqual((await fetch(`${inbox.url}/v1/topics`, { headers: { authorization: 'Bearer test-token' } })).status, 200);
 });
