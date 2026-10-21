@@ -31,6 +31,25 @@ and ask it to set up agenthook. [SKILL.md](SKILL.md) has the instructions.
 3. Your agent gets a notification inside its session that there's been an update.
 4. Agent does something with that info.
 
+## Subscription lifecycle
+
+By default a subscription is **one-shot**: it delivers events normally, then
+unsubscribes itself after the first terminal event — one whose status is
+`completed`, `success`, `failed`, `error`, or `cancelled`. This fits the common
+case of waiting for a single job to finish, and it stops a stale listener from
+grabbing stray events from the next run on the same topic. Progress updates and
+heartbeats are not terminal, so the listener stays put until the real end.
+
+For an ongoing feed — a continuous webhook stream, or one topic carrying
+completions from several background workers — opt into streaming to keep
+listening for every event (`stream: true` on the Pi subscribe tool,
+`/agenthook <topic> stream`, or `AGENTHOOK_MODE=stream` at startup). Background
+worker topics always stream, since one topic carries every worker's result.
+
+Delivery is a **queue, not a broadcast**: each event goes to exactly one
+listener. Two sessions on the same topic compete for events rather than both
+receiving a copy.
+
 ## What is it useful for?
 A few simple ideas:
 * Have an agent wait for GitHub deploys
@@ -48,14 +67,16 @@ Wrap a local command to notify an agenthook topic when it starts, while it runs,
 and when it finishes:
 
 ```sh
-./bin/agenthook.js run local.build --heartbeat-every-secs 30 -- npm test
+./bin/agenthook.js run local.build --heartbeat-every-secs 30 --label "nightly build" -- npm test
 ```
 
 The executable and its arguments must follow `--`; agenthook does not invoke a
 shell. `--heartbeat-every-secs` defaults to `30`; set it to `0` to disable
-progress events. Each event has a `runId` that ties the lifecycle together.
-The final callback reports inbox acceptance only, not proof that an agent read
-or acted on it. Events never cause the receiving agenthook runtime to run code.
+progress events. `--label` is optional: a short human-readable string attached
+to every event so a listener can tell concurrent runs apart. Each event has a
+`runId` that ties the lifecycle together. The final callback reports inbox
+acceptance only, not proof that an agent read or acted on it. Events never cause
+the receiving agenthook runtime to run code.
 
 ## Claude Code setup
 
@@ -130,7 +151,9 @@ The coordinator decides what happens next; agenthook carries the updates.
 
 Only the coordinator subscribes to the report topic. Workers send to it without
 subscribing, or they can consume reports meant for the coordinator. Workers that
-need incoming messages use separate topics.
+need incoming messages use separate topics. Give each worker a short
+human-readable label so its start, progress, and completion events are easy to
+tell apart when several run at once.
 
 Task assignment, review, and recovery are left as an exercise for the reader.
 For Codex-specific subagent reporting rules, including when to use the App
