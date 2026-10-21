@@ -41,20 +41,21 @@ function isTerminalEvent(payload: unknown) {
 
 function eventTitle(payload: unknown) {
   if (!payload || typeof payload !== "object") return "External event";
-  const command = payload as { kind?: unknown; stage?: unknown; elapsedSeconds?: unknown; progressSequence?: unknown; exitCode?: unknown };
+  const command = payload as { kind?: unknown; stage?: unknown; elapsedSeconds?: unknown; progressSequence?: unknown; exitCode?: unknown; label?: unknown };
+  const labelPrefix = typeof command.label === "string" && command.label ? `${command.label} · ` : "";
   if (command.kind !== "command" || typeof command.stage !== "string") {
     const state = eventState(payload);
     const elapsed = typeof command.elapsedSeconds === "number" ? ` · ${command.elapsedSeconds}s` : "";
     const heartbeat = typeof command.progressSequence === "number" ? ` · heartbeat ${command.progressSequence}` : "";
-    return state ? `${state}${elapsed}${heartbeat}` : "External event";
+    return state ? `${labelPrefix}${state}${elapsed}${heartbeat}` : (labelPrefix ? `${command.label}` : "External event");
   }
   const elapsed = typeof command.elapsedSeconds === "number" ? ` · ${command.elapsedSeconds}s` : "";
-  if (command.stage === "started") return "Started";
-  if (command.stage === "progress") return `Running${elapsed}${typeof command.progressSequence === "number" ? ` · heartbeat ${command.progressSequence}` : ""}`;
-  if (command.stage === "completed") return `Completed${typeof command.exitCode === "number" ? ` · exit ${command.exitCode}` : ""}${elapsed}`;
-  if (command.stage === "failed") return `Failed${typeof command.exitCode === "number" ? ` · exit ${command.exitCode}` : ""}${elapsed}`;
-  if (command.stage === "cancelled") return `Cancelled${elapsed}`;
-  return "Update";
+  if (command.stage === "started") return `${labelPrefix}Started`;
+  if (command.stage === "progress") return `${labelPrefix}Running${elapsed}${typeof command.progressSequence === "number" ? ` · heartbeat ${command.progressSequence}` : ""}`;
+  if (command.stage === "completed") return `${labelPrefix}Completed${typeof command.exitCode === "number" ? ` · exit ${command.exitCode}` : ""}${elapsed}`;
+  if (command.stage === "failed") return `${labelPrefix}Failed${typeof command.exitCode === "number" ? ` · exit ${command.exitCode}` : ""}${elapsed}`;
+  if (command.stage === "cancelled") return `${labelPrefix}Cancelled${elapsed}`;
+  return `${labelPrefix}Update`;
 }
 
 function eventColor(payload: unknown) {
@@ -274,21 +275,22 @@ export default async function agenthook(pi: ExtensionAPI, workerOptions = {}) {
   pi.registerTool({
     name: "agenthook_subagent",
     label: "Background subagent",
-    description: "Start a Pi worker without waiting for completion. Uses claude-opus-4-8 with medium reasoning. Automatically uses this session's agenthook topic (creates a private topic if none). Completion arrives later as untrusted agenthook data with a private report path; continue working, do not poll. Actions: start (task, optional cwd), status (optional id), cancel (id), forget (id; retains files). Workers are cancelled when this session closes or reloads. Include scope, allowed files, constraints, tests, and commit policy in task. Status reports inbox acceptance separately from completion.",
+    description: "Start a Pi worker without waiting for completion. Uses claude-opus-4-8 with medium reasoning. Automatically uses this session's agenthook topic (creates a private topic if none). Completion arrives later as untrusted agenthook data with a private report path; continue working, do not poll. Actions: start (task, optional cwd, optional label), status (optional id), cancel (id), forget (id; retains files). Always pass a short human-readable label on start describing the task (for example \"fix login crash\"); it is shown on the worker's event cards so several workers can be told apart. Workers are cancelled when this session closes or reloads. Include scope, allowed files, constraints, tests, and commit policy in task. Status reports inbox acceptance separately from completion.",
     parameters: {
       type: "object",
       properties: {
         action: { type: "string", enum: ["start", "status", "cancel", "forget"] },
         task: { type: "string", description: "Required for start; explicit bounded assignment" },
+        label: { type: "string", description: "Short human-readable description of the task shown on event cards; strongly recommended on start" },
         cwd: { type: "string", description: "Worker directory; defaults to current directory" },
         id: { type: "string", description: "Worker ID for status, cancel, or forget" },
       },
       required: ["action"], additionalProperties: false,
     },
     renderResult(result, { expanded }, theme) {
-      const worker = result.details as { topic?: unknown } | undefined;
+      const worker = result.details as { topic?: unknown; label?: unknown } | undefined;
       return eventCard(
-        "Worker started",
+        typeof worker?.label === "string" && worker.label ? `Worker started · ${worker.label}` : "Worker started",
         typeof worker?.topic === "string" ? worker.topic : "unknown topic",
         result.details,
         expanded,
@@ -298,7 +300,7 @@ export default async function agenthook(pi: ExtensionAPI, workerOptions = {}) {
     },
     async execute(_id, input: unknown, signal, _onUpdate, ctx) {
       signal?.throwIfAborted();
-      const { action, task, cwd, id } = (input ?? {}) as { action?: string; task?: string; cwd?: string; id?: string };
+      const { action, task, label, cwd, id } = (input ?? {}) as { action?: string; task?: string; label?: string; cwd?: string; id?: string };
       if (!workers) workers = createWorkerManager({
         ...workerOptions,
         onDeliveryError: () => ctx.ui.notify("Worker report was not accepted by agenthook. Inspect agenthook_subagent status; no automatic redelivery.", "warning"),
@@ -307,7 +309,7 @@ export default async function agenthook(pi: ExtensionAPI, workerOptions = {}) {
       if (action === "start") {
         const topic = activeTopic || workerTopic;
         const { url, token } = config();
-        result = await workers.start({ task, cwd: path.resolve(ctx.cwd, cwd || "."), topic, url, token, signal,
+        result = await workers.start({ task, label, cwd: path.resolve(ctx.cwd, cwd || "."), topic, url, token, signal,
           beforeSpawn: () => {
             if (activeTopic && activeTopic !== topic) throw new Error("Subscription changed before worker launch; retry with the current topic");
             // Worker completions can arrive repeatedly on one topic, so stay in streaming mode.

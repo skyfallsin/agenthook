@@ -154,6 +154,25 @@ test('workers launch concurrently and never consume their parent reports', async
   assert.equal(app.inbox.topics()['parent.reports'], 3);
 });
 
+test('an optional human-readable label is validated and carried on every worker event', async t => {
+  const { manager, launches, app, start } = await setup(t, { heartbeatEveryMilliseconds: 10 });
+  await assert.rejects(start('hold', { label: 'two\nlines' }), /short single-line string/);
+  const job = await start('hold', { label: 'fix login crash' });
+  assert.equal(job.label, 'fix login crash');
+  await until(() => fs.existsSync(launches[0].ready));
+  await until(() => app.inbox.topics()['parent.reports'] >= 1);
+  const heartbeat = app.inbox.take('parent.reports');
+  assert.equal(heartbeat.payload.label, 'fix login crash');
+  process.kill(job.pid, 'SIGUSR1');
+  await until(() => manager.status(job.id).delivery === 'accepted');
+  let completion;
+  while (app.inbox.topics()['parent.reports']) {
+    const event = app.inbox.take('parent.reports');
+    if (event.payload.status === 'completed') completion = event;
+  }
+  assert.equal(completion?.payload.label, 'fix login crash');
+});
+
 test('failed authentication and pre-aborted launches create no workers', async t => {
   const { launches, start } = await setup(t);
   await assert.rejects(start('hold', { token: 'wrong' }), /authentication/);

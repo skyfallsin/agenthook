@@ -114,6 +114,10 @@ test('subagent start result renders as a titled agenthook card', async (t) => {
   assert.equal(compact, 'agenthook · workers.test  ◆ Worker started  ');
   const expanded = tool.renderResult(result, { expanded: true }, theme).render(120).join('\n');
   assert.match(expanded, /"status": "running"/);
+
+  const labeled = { details: { topic: 'workers.test', label: 'fix login crash', status: 'running', id: 'worker-1' } };
+  const labeledCompact = tool.renderResult(labeled, { expanded: false }, theme).render(120).join('\n');
+  assert.match(labeledCompact, /◆ Worker started · fix login crash/);
 });
 
 
