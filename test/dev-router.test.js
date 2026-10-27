@@ -188,3 +188,33 @@ test('returns 502 for an unavailable agenthook upstream without falling back or 
   assert.ok(!output.includes(secret));
   assert.equal(joRequests, 0);
 });
+
+test('routes /wbm/* to the WhatsApp Business bridge with the prefix stripped, and rejects bare/lookalike paths', async t => {
+  let joRequests = 0;
+  const received = [];
+  const jo = http.createServer((_request, response) => { joRequests++; response.end('jo'); });
+  const wbm = http.createServer((request, response) => {
+    received.push({ url: request.url, method: request.method });
+    response.end(request.url.startsWith('/webhook') ? 'wbm-webhook' : 'wbm');
+  });
+  const joPort = await listen(jo);
+  const wbmPort = await listen(wbm);
+  const router = createDevRouter({ port: 0, joPort, wbmPort });
+  const port = await listen(router.server);
+  t.after(async () => Promise.all([close(router.server), close(jo), close(wbm)]));
+  const base = `http://127.0.0.1:${port}`;
+
+  // GET verification handshake and POST delivery both reach jo-wbm /webhook.
+  assert.equal(await (await fetch(`${base}/wbm/webhook?hub.challenge=abc`)).text(), 'wbm-webhook');
+  assert.equal(await (await fetch(`${base}/wbm/webhook`, { method: 'POST', body: '{}' })).text(), 'wbm-webhook');
+
+  // Bare and lookalike prefixes must 404 and never reach Jo or jo-wbm.
+  for (const path of ['/wbm', '/wbmx', '/wbms/webhook']) {
+    assert.equal((await fetch(`${base}${path}`)).status, 404, path);
+  }
+  assert.equal(joRequests, 0);
+  assert.deepEqual(received, [
+    { url: '/webhook?hub.challenge=abc', method: 'GET' },
+    { url: '/webhook', method: 'POST' },
+  ]);
+});

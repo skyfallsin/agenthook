@@ -41,6 +41,10 @@ function route(url) {
     if (!pathname.startsWith('/agenthook/')) return { reject: true };
     return { agenthook: true, path: `${pathname.slice('/agenthook'.length)}${question < 0 ? '' : url.slice(question)}` };
   }
+  if (pathname === '/wbm' || pathname.startsWith('/wbm')) {
+    if (!pathname.startsWith('/wbm/')) return { reject: true };
+    return { wbm: true, path: `${pathname.slice('/wbm'.length)}${question < 0 ? '' : url.slice(question)}` };
+  }
   return { agenthook: false, path: url };
 }
 
@@ -54,6 +58,7 @@ export function createDevRouter({
   port = Number(process.env.DEV_ROUTER_PORT || 3211),
   joPort = 10000,
   agenthookPort = 3210,
+  wbmPort = Number(process.env.DEV_ROUTER_WBM_PORT || 8091),
   appleMessagesPort = Number(process.env.DEV_ROUTER_APPLE_MESSAGES_PORT || 0),
 } = {}) {
   if (!['127.0.0.1', '::1', 'localhost'].includes(host)) throw new Error('Development router must bind to loopback');
@@ -64,7 +69,7 @@ export function createDevRouter({
       pathname === '/v1/apple-messages/stream-event' ||
       pathname === '/__apple-support/' || pathname.startsWith('/__apple-support/')
     );
-    return { host: '127.0.0.1', port: target.agenthook ? agenthookPort : appleReview ? appleMessagesPort : joPort, path: target.path };
+    return { host: '127.0.0.1', port: target.agenthook ? agenthookPort : target.wbm ? wbmPort : appleReview ? appleMessagesPort : joPort, path: target.path };
   };
   const server = http.createServer((request, response) => {
     const target = route(request.url);
