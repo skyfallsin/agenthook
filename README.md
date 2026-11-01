@@ -143,6 +143,16 @@ Pull request builds do not send callbacks. The callback requires the three
 Actions secrets described in the setup guide and a reachable listener. If
 sending fails, the callback job fails separately from the tests.
 
+## Act on an event with a local agent
+
+Events never make agenthook run code, but a listener you write can. The
+[jojo takeover example](examples/jojo-takeover.mjs) waits on a topic and, for
+each `takeover` event from [jojo](https://w.askjo.ai) (a ticket you took over,
+or a fix pushed to a repository with no GitHub build), creates a worktree on the
+ticket's branch, writes the brief to `PROMPT.md`, and starts the agent command
+you pass. The agent reviews and builds locally, then reports its verdict back to
+jojo through its API. Adapt the checkout map and the command to your setup.
+
 ## Agent swarms
 
 You can use agenthook to coordinate a swarm of agents. A coordinator subscribes
