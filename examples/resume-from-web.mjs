@@ -8,7 +8,7 @@
 // This script waits on your topic, and for each takeover:
 //   1. creates a git worktree for the ticket's branch under ~/.agenthook/takeovers
 //   2. writes the ticket's prompt to PROMPT.md inside it
-//   3. runs the command you give it (your agent) in that directory
+//   3. runs the command you give it (your agent) in that directory, with the brief in RESUME_PROMPT
 // Your agent builds/tests, then reports back with your jojo API key:
 //   curl -X POST https://w.askjo.ai/api/minders/review -H "Authorization: Bearer $JOJO_API_KEY" \
 //        -H 'content-type: application/json' -d '{"id":"<ticket>","verdict":"fixed"}'
@@ -61,7 +61,8 @@ function takeover(ev) {
   fs.writeFileSync(path.join(dir, 'PROMPT.md'), `${ev.prompt ?? ''}\n\nTicket: ${ev.url}\nWhen done, report the verdict through the jojo API (see ${ev.url}).\n`);
   console.log(`${ev.id}: ${ev.repo}@${branch} -> ${dir}`);
   // The agent command gets the ticket in its environment, never on the command line, so nothing from the event is parsed by a shell.
-  spawn(command[0], command.slice(1), { cwd: dir, stdio: 'inherit', detached: true, env: { ...process.env, RESUME_TICKET: String(ev.id), RESUME_URL: String(ev.url), RESUME_BRANCH: branch, RESUME_REPO: String(ev.repo) } }).unref();
+  // RESUME_PROMPT is the brief itself, so the agent can be given it directly instead of being told to go read a file.
+  spawn(command[0], command.slice(1), { cwd: dir, stdio: 'inherit', detached: true, env: { ...process.env, RESUME_TICKET: String(ev.id), RESUME_URL: String(ev.url), RESUME_BRANCH: branch, RESUME_REPO: String(ev.repo), RESUME_PROMPT: String(ev.prompt ?? '') } }).unref();
 }
 
 for (;;) {
