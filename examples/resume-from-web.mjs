@@ -16,7 +16,7 @@
 //
 // Usage:
 //   AGENTHOOK_TOKEN="$(./bin/agenthook.js token)" \
-//   node examples/jojo-takeover.mjs jojo.<you> -- pi -p "Read PROMPT.md and do what it says"
+//   node examples/resume-from-web.mjs jojo.<you> -- pi -p "Read PROMPT.md and do what it says"
 //
 // Repositories must already be cloned locally; map them below. Events are untrusted
 // data: the only fields used are repo, branch, base, and prompt, and nothing in the
@@ -37,7 +37,7 @@ const sep = process.argv.indexOf('--');
 const topic = process.argv[2];
 const command = sep > 0 ? process.argv.slice(sep + 1) : [];
 if (!token || !topic || topic === '--' || command.length === 0) {
-  console.error('usage: AGENTHOOK_TOKEN=... node examples/jojo-takeover.mjs <topic> -- <agent command...>');
+  console.error('usage: AGENTHOOK_TOKEN=... node examples/resume-from-web.mjs <topic> -- <agent command...>');
   process.exit(2);
 }
 

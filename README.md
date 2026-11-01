@@ -146,7 +146,7 @@ sending fails, the callback job fails separately from the tests.
 ## Act on an event with a local agent
 
 Events never make agenthook run code, but a listener you write can. The
-[jojo takeover example](examples/jojo-takeover.mjs) waits on a topic and, for
+[resume-from-web example](examples/resume-from-web.mjs) waits on a topic and, for
 each `takeover` event from [jojo](https://w.askjo.ai) (a ticket you took over,
 or a fix pushed to a repository with no GitHub build), creates a worktree on the
 ticket's branch, writes the brief to `PROMPT.md`, and starts the agent command
