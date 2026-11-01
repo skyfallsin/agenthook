@@ -27,8 +27,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 
+// Map 'owner/repo' to a local clone, either here or as JSON in RESUME_CHECKOUTS.
 const CHECKOUTS = {
   // 'owner/repo': '/absolute/path/to/local/clone',
+  ...(process.env.RESUME_CHECKOUTS ? JSON.parse(process.env.RESUME_CHECKOUTS) : {}),
 };
 
 const url = process.env.AGENTHOOK_URL || 'http://127.0.0.1:3210';
@@ -58,7 +60,8 @@ function takeover(ev) {
   }
   fs.writeFileSync(path.join(dir, 'PROMPT.md'), `${ev.prompt ?? ''}\n\nTicket: ${ev.url}\nWhen done, report the verdict through the jojo API (see ${ev.url}).\n`);
   console.log(`${ev.id}: ${ev.repo}@${branch} -> ${dir}`);
-  spawn(command[0], command.slice(1), { cwd: dir, stdio: 'inherit', detached: true }).unref();
+  // The agent command gets the ticket in its environment, never on the command line, so nothing from the event is parsed by a shell.
+  spawn(command[0], command.slice(1), { cwd: dir, stdio: 'inherit', detached: true, env: { ...process.env, RESUME_TICKET: String(ev.id), RESUME_URL: String(ev.url), RESUME_BRANCH: branch, RESUME_REPO: String(ev.repo) } }).unref();
 }
 
 for (;;) {
